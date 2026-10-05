@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<gameList>
+  <game>
+    <path>./Punktfunk.sh</path>
+    <name>Punktfunk</name>
+    <desc>Experimental native Punktfunk low-latency streaming client for TrimUI Smart Pro S.</desc>
+    <releasedate>20261006T000000</releasedate>
+    <developer>Punktfunk contributors</developer>
+    <genre>Streaming</genre>
+  </game>
+  <game>
+    <path>./Punktfunk Setup.sh</path>
+    <name>Punktfunk Setup</name>
+    <desc>Pair the handheld with a Punktfunk host and choose the default host.</desc>
+    <releasedate>20261006T000000</releasedate>
+    <developer>ruslan-k</developer>
+    <genre>Utility</genre>
+  </game>
+</gameList>
