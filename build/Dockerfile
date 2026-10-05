@@ -3,7 +3,14 @@ FROM debian:bullseye-slim
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PATH=/root/.cargo/bin:$PATH
 
-RUN dpkg --add-architecture arm64 \
+# Bullseye is archived by 2026. Pin an immutable snapshot instead of the moving
+# deb.debian.org/security indices, which can briefly reference already-rotated .debs.
+RUN printf '%s\n' \
+      'deb [check-valid-until=no] http://snapshot.debian.org/archive/debian/20261001T000000Z bullseye main' \
+      'deb [check-valid-until=no] http://snapshot.debian.org/archive/debian-security/20261001T000000Z bullseye-security main' \
+      > /etc/apt/sources.list \
+    && printf 'Acquire::Check-Valid-Until "false";\n' > /etc/apt/apt.conf.d/99snapshot \
+    && dpkg --add-architecture arm64 \
     && apt-get update \
     && apt-get install -y --no-install-recommends \
       ca-certificates curl git patch xz-utils unzip zip jq file \
