@@ -121,7 +121,7 @@ chmod +x "$STAGE/Punktfunk.sh" "$STAGE/Punktfunk Setup.sh" \
   "$STAGE/punktfunk/runtime-env.sh" \
   "$STAGE/punktfunk/bin/punktfunk" "$STAGE/punktfunk/bin/punktfunk-session"
 
-"$ROOT/scripts/validate-package.sh" "$STAGE"
+bash "$ROOT/scripts/validate-package.sh" "$STAGE"
 
 echo "==> archive"
 (
