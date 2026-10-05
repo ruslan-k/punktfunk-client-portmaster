@@ -1,0 +1,153 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT=$(cd "$(dirname "$0")/.." && pwd)
+# shellcheck disable=SC1091
+source "$ROOT/sources.env"
+
+BUILD=$ROOT/.build
+SRC=$BUILD/src
+PREFIX=/opt/target
+TARGET_DIR=$BUILD/target
+STAGE=$BUILD/stage
+DIST=$ROOT/dist
+
+rm -rf "$BUILD" "$DIST" "$PREFIX"
+mkdir -p "$SRC" "$PREFIX" "$TARGET_DIR" "$STAGE" "$DIST"
+
+echo "==> source: Punktfunk $PUNKTFUNK_REF"
+git clone --filter=blob:none "$PUNKTFUNK_REPO" "$SRC/punktfunk"
+git -C "$SRC/punktfunk" checkout --detach "$PUNKTFUNK_REF"
+PUNKTFUNK_ACTUAL=$(git -C "$SRC/punktfunk" rev-parse HEAD)
+test "$PUNKTFUNK_ACTUAL" = "$PUNKTFUNK_REF"
+
+echo "==> source: SDL $SDL_TAG"
+git clone --depth 1 --branch "$SDL_TAG" "$SDL_REPO" "$SRC/SDL"
+SDL_ACTUAL=$(git -C "$SRC/SDL" rev-parse HEAD)
+
+echo "==> build SDL3 for aarch64"
+export PKG_CONFIG_ALLOW_CROSS=1
+export PKG_CONFIG_LIBDIR="$PREFIX/lib/pkgconfig:/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig"
+export PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig"
+export CC=aarch64-linux-gnu-gcc
+export CXX=aarch64-linux-gnu-g++
+export AR=aarch64-linux-gnu-ar
+export RANLIB=aarch64-linux-gnu-ranlib
+
+cmake -S "$SRC/SDL" -B "$BUILD/sdl-build" -G Ninja \
+  -DCMAKE_SYSTEM_NAME=Linux \
+  -DCMAKE_SYSTEM_PROCESSOR=aarch64 \
+  -DCMAKE_C_COMPILER=aarch64-linux-gnu-gcc \
+  -DCMAKE_CXX_COMPILER=aarch64-linux-gnu-g++ \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_INSTALL_PREFIX="$PREFIX" \
+  -DSDL_SHARED=ON \
+  -DSDL_STATIC=OFF \
+  -DSDL_TESTS=OFF \
+  -DSDL_TEST_LIBRARY=OFF \
+  -DSDL_X11=ON \
+  -DSDL_WAYLAND=ON \
+  -DSDL_KMSDRM=OFF \
+  -DSDL_PIPEWIRE=OFF \
+  -DSDL_ALSA=ON
+
+cmake --build "$BUILD/sdl-build" --parallel "$(nproc)"
+cmake --install "$BUILD/sdl-build"
+
+test -f "$PREFIX/lib/libSDL3.so.0"
+
+echo "==> apply embedded compatibility patch"
+patch -d "$SRC/punktfunk" -p1 --forward < "$ROOT/patches/0001-bullseye-pipewire-compat.patch"
+
+echo "==> cross-build Punktfunk CLI + minimal session"
+export PATH="/root/.cargo/bin:$PATH"
+export CARGO_TARGET_DIR="$TARGET_DIR"
+export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
+export CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc
+export CXX_aarch64_unknown_linux_gnu=aarch64-linux-gnu-g++
+export AR_aarch64_unknown_linux_gnu=aarch64-linux-gnu-ar
+export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS="-C link-arg=-Wl,--as-needed"
+export PKG_CONFIG_ALLOW_CROSS=1
+export PKG_CONFIG_LIBDIR="$PREFIX/lib/pkgconfig:/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig"
+export PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig"
+export BINDGEN_EXTRA_CLANG_ARGS="--target=aarch64-unknown-linux-gnu -I/usr/include/aarch64-linux-gnu -I/usr/aarch64-linux-gnu/include"
+
+cd "$SRC/punktfunk"
+rustup override set "$RUST_TOOLCHAIN"
+rustup target add "$TARGET" --toolchain "$RUST_TOOLCHAIN"
+
+cargo build --locked --release --target "$TARGET" \
+  -p punktfunk-cli \
+  -p punktfunk-client-session \
+  --no-default-features
+
+echo "==> stage PortMaster package"
+cp -a "$ROOT/package/." "$STAGE/"
+mkdir -p "$STAGE/punktfunk/bin" "$STAGE/punktfunk/libs" "$STAGE/punktfunk/licenses"
+
+cp "$TARGET_DIR/$TARGET/release/punktfunk" "$STAGE/punktfunk/bin/"
+cp "$TARGET_DIR/$TARGET/release/punktfunk-session" "$STAGE/punktfunk/bin/"
+cp -L "$PREFIX/lib/libSDL3.so.0" "$STAGE/punktfunk/libs/libSDL3.so.0"
+
+"$ROOT/scripts/collect-libs.sh" \
+  "$STAGE/punktfunk/libs" \
+  "$STAGE/punktfunk/bin/punktfunk" \
+  "$STAGE/punktfunk/bin/punktfunk-session" \
+  "$STAGE/punktfunk/libs/libSDL3.so.0"
+
+for license in LICENSE-MIT LICENSE-APACHE; do
+  if [ -f "$SRC/punktfunk/$license" ]; then
+    cp "$SRC/punktfunk/$license" "$STAGE/punktfunk/licenses/"
+  fi
+done
+if [ -f "$SRC/punktfunk/clients/linux/THIRD-PARTY-NOTICES.txt" ]; then
+  cp "$SRC/punktfunk/clients/linux/THIRD-PARTY-NOTICES.txt" \
+    "$STAGE/punktfunk/licenses/THIRD-PARTY-NOTICES.txt"
+fi
+
+cat > "$STAGE/punktfunk/SOURCES.txt" <<EOF
+Punktfunk repository: $PUNKTFUNK_REPO
+Punktfunk commit:     $PUNKTFUNK_ACTUAL
+SDL repository:       $SDL_REPO
+SDL tag:              $SDL_TAG
+SDL commit:           $SDL_ACTUAL
+Rust toolchain:       $RUST_TOOLCHAIN
+Target:               $TARGET
+Build base:           $BUILD_BASE
+Port repository SHA:  ${GITHUB_SHA:-local}
+EOF
+
+chmod +x "$STAGE/Punktfunk.sh" "$STAGE/Punktfunk Setup.sh" \
+  "$STAGE/punktfunk/runtime-env.sh" \
+  "$STAGE/punktfunk/bin/punktfunk" "$STAGE/punktfunk/bin/punktfunk-session"
+
+"$ROOT/scripts/validate-package.sh" "$STAGE"
+
+echo "==> archive"
+(
+  cd "$STAGE"
+  zip -9 -r "$DIST/punktfunk.zip" .
+)
+
+sha256sum "$DIST/punktfunk.zip" > "$DIST/SHA256SUMS"
+
+python3 - "$DIST/build-info.json" <<PY
+import json, os, sys
+out = {
+    "punktfunk_repo": "$PUNKTFUNK_REPO",
+    "punktfunk_commit": "$PUNKTFUNK_ACTUAL",
+    "sdl_repo": "$SDL_REPO",
+    "sdl_tag": "$SDL_TAG",
+    "sdl_commit": "$SDL_ACTUAL",
+    "rust_toolchain": "$RUST_TOOLCHAIN",
+    "target": "$TARGET",
+    "build_base": "$BUILD_BASE",
+    "github_sha": os.environ.get("GITHUB_SHA", "local"),
+}
+with open(sys.argv[1], "w", encoding="utf-8") as f:
+    json.dump(out, f, indent=2)
+    f.write("\n")
+PY
+
+echo "==> done"
+cat "$DIST/SHA256SUMS"
