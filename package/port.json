@@ -1,0 +1,31 @@
+{
+  "version": 3,
+  "name": "punktfunk.zip",
+  "items": [
+    "Punktfunk.sh",
+    "Punktfunk Setup.sh",
+    "punktfunk"
+  ],
+  "items_opt": [],
+  "attr": {
+    "title": "Punktfunk",
+    "porter": [
+      "ruslan-k"
+    ],
+    "desc": "Experimental native Punktfunk low-latency streaming client for TrimUI Smart Pro S.",
+    "desc_md": "Experimental **Punktfunk** native low-latency streaming client for **TrimUI Smart Pro S**. Ships the headless CLI plus the SDL3/Vulkan session renderer, with pairing and PortMaster launchers.",
+    "inst": "Run Punktfunk Setup once, pair with your Punktfunk host, then launch Punktfunk.",
+    "inst_md": "1. Run **Punktfunk Setup**.\n2. Select/enter the host and enter its pairing PIN.\n3. Launch **Punktfunk**.\n\nThe first release is experimental because the final SDL3/Vulkan WSI path depends on the TSPS Mali firmware stack.",
+    "genres": [
+      "other"
+    ],
+    "image": null,
+    "rtr": true,
+    "exp": true,
+    "runtime": null,
+    "reqs": [],
+    "arch": [
+      "aarch64"
+    ]
+  }
+}
