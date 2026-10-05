@@ -3,13 +3,13 @@ FROM debian:bullseye-slim
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PATH=/root/.cargo/bin:$PATH
 
-# Bullseye is archived by 2026. Pin an immutable snapshot instead of the moving
-# deb.debian.org/security indices, which can briefly reference already-rotated .debs.
+# Bullseye is archived by 2026. Use Debian Archive rather than the moving
+# deb.debian.org/security indices. Valid-Until is intentionally disabled for EOL suites.
 RUN printf '%s\n' \
-      'deb [check-valid-until=no] http://snapshot.debian.org/archive/debian/20261001T000000Z bullseye main' \
-      'deb [check-valid-until=no] http://snapshot.debian.org/archive/debian-security/20261001T000000Z bullseye-security main' \
+      'deb [check-valid-until=no] http://archive.debian.org/debian bullseye main' \
+      'deb [check-valid-until=no] http://archive.debian.org/debian-security bullseye-security main' \
       > /etc/apt/sources.list \
-    && printf 'Acquire::Check-Valid-Until "false";\n' > /etc/apt/apt.conf.d/99snapshot \
+    && printf 'Acquire::Check-Valid-Until "false";\n' > /etc/apt/apt.conf.d/99archive \
     && dpkg --add-architecture arm64 \
     && apt-get update \
     && apt-get install -y --no-install-recommends \
