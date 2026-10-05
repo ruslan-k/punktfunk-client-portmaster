@@ -45,7 +45,7 @@ jobs:
             -e GITHUB_SHA="$GITHUB_SHA" \
             -v "$GITHUB_WORKSPACE:/work" \
             punktfunk-portmaster-builder \
-            ./scripts/build.sh
+            bash ./scripts/build.sh
 
       - name: Show package metadata
         run: |
