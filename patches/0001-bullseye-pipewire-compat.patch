@@ -1,10 +1,14 @@
 diff --git a/crates/pf-client-core/Cargo.toml b/crates/pf-client-core/Cargo.toml
 --- a/crates/pf-client-core/Cargo.toml
 +++ b/crates/pf-client-core/Cargo.toml
-@@ -121,7 +121,7 @@ mdns-sd = { version = "0.21", optional = true }
- # `Buffer::requested` — the graph's per-cycle frame ask, without which the
+@@ -153,11 +153,11 @@ rand = "0.9"
+ # need the hidapi driver). Linux links the system SDL3; Windows builds it from source
+ # (no system SDL3 there — same choice as clients/windows).
+ [target.'cfg(target_os = "linux")'.dependencies]
+ # `v0_3_49` for `Buffer::requested` — the graph's per-cycle frame ask, without which the
  # playback callback can only size writes from the buffer CEILING (quantum-limit, ~170 ms).
- # Pure cfg gate; needs libpipewire >= 0.3.49 at runtime, which every ship target clears.
+ # Pure cfg gate; needs libpipewire ≥ 0.3.49 (2022-03) at runtime, which every ship target
+ # (SteamOS, flatpak runtimes, Arch, Ubuntu ≥ 22.10) clears.
 -pipewire = { version = "0.9", features = ["v0_3_49"], optional = true }
 +pipewire = { version = "0.9", optional = true }
  sdl3 = { version = "0.18", features = ["hidapi"], optional = true }
@@ -13,10 +17,12 @@ diff --git a/crates/pf-client-core/Cargo.toml b/crates/pf-client-core/Cargo.toml
 diff --git a/crates/pf-client-core/src/audio.rs b/crates/pf-client-core/src/audio.rs
 --- a/crates/pf-client-core/src/audio.rs
 +++ b/crates/pf-client-core/src/audio.rs
-@@ -347,7 +347,10 @@ fn pw_thread(
+@@ -379,10 +379,13 @@ fn pw_thread(
+                     let _ = ud.recycle.try_send(chunk);
                  }
                  // `requested` is this cycle's quantum; the mapped buffer is sized for PipeWire's
                  // `quantum-limit` (8192 ≈ 170 ms). Filling to capacity taught the policy a 170 ms
+                 // drain and lifted the underrun floor above any sync target. `requested == 0` → capacity.
 -                let requested = usize::try_from(buffer.requested()).unwrap_or(0);
 +                // TrimUI compatibility build uses PipeWire headers older than 0.3.49, where
 +                // pw_buffer.requested is unavailable. Zero intentionally selects the existing
