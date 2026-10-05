@@ -1,33 +1,12 @@
 diff --git a/crates/pf-client-core/Cargo.toml b/crates/pf-client-core/Cargo.toml
 --- a/crates/pf-client-core/Cargo.toml
 +++ b/crates/pf-client-core/Cargo.toml
-@@ -153,11 +153,11 @@ rand = "0.9"
- # need the hidapi driver). Linux links the system SDL3; Windows builds it from source
- # (no system SDL3 there — same choice as clients/windows).
- [target.'cfg(target_os = "linux")'.dependencies]
- # `v0_3_49` for `Buffer::requested` — the graph's per-cycle frame ask, without which the
- # playback callback can only size writes from the buffer CEILING (quantum-limit, ~170 ms).
- # Pure cfg gate; needs libpipewire ≥ 0.3.49 (2022-03) at runtime, which every ship target
- # (SteamOS, flatpak runtimes, Arch, Ubuntu ≥ 22.10) clears.
+@@
 -pipewire = { version = "0.9", features = ["v0_3_49"], optional = true }
 +pipewire = { version = "0.9", optional = true }
- sdl3 = { version = "0.18", features = ["hidapi"], optional = true }
- # Audio-thread priority (`audio_rt`): one blocking D-Bus call per boosted thread — the Realtime
- # PORTAL (session bus) inside a flatpak, where the sandbox's PID namespace makes a direct rtkit
 diff --git a/crates/pf-client-core/src/audio.rs b/crates/pf-client-core/src/audio.rs
 --- a/crates/pf-client-core/src/audio.rs
 +++ b/crates/pf-client-core/src/audio.rs
-@@ -379,10 +379,13 @@ fn pw_thread(
-                     let _ = ud.recycle.try_send(chunk);
-                 }
-                 // `requested` is this cycle's quantum; the mapped buffer is sized for PipeWire's
-                 // `quantum-limit` (8192 ≈ 170 ms). Filling to capacity taught the policy a 170 ms
-                 // drain and lifted the underrun floor above any sync target. `requested == 0` → capacity.
+@@
 -                let requested = usize::try_from(buffer.requested()).unwrap_or(0);
-+                // TrimUI compatibility build uses PipeWire headers older than 0.3.49, where
-+                // pw_buffer.requested is unavailable. Zero intentionally selects the existing
-+                // capacity fallback. On SpruceOS without a PipeWire server playback fails soft.
 +                let requested = 0usize;
-                 // F32LE at every rate and depth. Core already decoded 16/24-bit to f32; S24 would
-                 // rewrite this callback to carry bits that already fit in the f32 mantissa.
-                 let stride = 4 * ud.channels;
