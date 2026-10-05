@@ -31,7 +31,7 @@ Run **Punktfunk Setup** once to pair the handheld with a host, then launch **Pun
 
 ```sh
 docker build -f build/Dockerfile -t punktfunk-portmaster-builder .
-docker run --rm -v "$PWD:/work" punktfunk-portmaster-builder ./scripts/build.sh
+docker run --rm -v "$PWD:/work" punktfunk-portmaster-builder bash ./scripts/build.sh
 ```
 
 Artifacts are written to `dist/`.
