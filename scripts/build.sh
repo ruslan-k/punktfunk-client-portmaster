@@ -59,7 +59,32 @@ cmake --install "$BUILD/sdl-build"
 test -f "$PREFIX/lib/libSDL3.so.0"
 
 echo "==> apply embedded compatibility patch"
-patch -d "$SRC/punktfunk" -p1 --forward < "$ROOT/patches/0001-bullseye-pipewire-compat.patch"
+python3 - "$SRC/punktfunk" <<'PY'
+from pathlib import Path
+import sys
+
+root = Path(sys.argv[1])
+changes = [
+    (
+        root / "crates/pf-client-core/Cargo.toml",
+        'pipewire = { version = "0.9", features = ["v0_3_49"], optional = true }',
+        'pipewire = { version = "0.9", optional = true }',
+    ),
+    (
+        root / "crates/pf-client-core/src/audio.rs",
+        'let requested = usize::try_from(buffer.requested()).unwrap_or(0);',
+        'let requested = 0usize;',
+    ),
+]
+
+for path, old, new in changes:
+    text = path.read_text(encoding="utf-8")
+    count = text.count(old)
+    if count != 1:
+        raise SystemExit(f"{path}: expected exactly one compatibility target, found {count}")
+    path.write_text(text.replace(old, new), encoding="utf-8")
+    print(f"patched {path.relative_to(root)}")
+PY
 
 echo "==> cross-build Punktfunk CLI + minimal session"
 export PATH="/root/.cargo/bin:$PATH"
