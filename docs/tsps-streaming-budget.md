@@ -158,6 +158,36 @@ three-plane planar import or an `NV12` output. `PUNKTFUNK_CEDAR_PIXFMT` requests
 FBM reports the format it actually delivers (`e_pixel_format = 4` today even
 though 1 is requested), so the request has to be measured, not assumed.
 
+
+### The vendor pixel-format request is ignored
+
+`PUNKTFUNK_CEDAR_PIXFMT=6` (asking `VConfig.eOutputPixelFormat` for `NV12`) was
+measured on the device: the FBM still delivered `e_pixel_format = 4` (`YV12`),
+the descriptor was still 1384448 bytes of packed `YV12`, the probe still matched
+at `(0, 921600, 1152000)`, and decode stayed at 4.478 ms with the same 60 FPS,
+lag 0 and zero errors.
+
+So the delivered picture format is not selectable through `VConfig` on this
+decoder path. The zero-copy win therefore requires the presenter to accept a
+three-plane planar frame (three `R8` images at these offsets, `LINEAR`, plus the
+CSC change), because core Vulkan has no three-plane `YV12` image format and the
+current importer takes two-plane `NV12`/`P010`/`NV24` only. That is a change to
+the working render path, not to the decoder, and is deliberately left as a
+separate piece of work: the measured decode is 4.55 ms with the copy included.
+
+### Where the optimisation work lands
+
+| axis | verdict |
+| --- | --- |
+| output-hold gate (`VConfig+192`) | taken: lag 2 -> 0, decode ~106 -> ~5 ms |
+| single final I420 allocation + one pass per plane | taken: copy 3.6 -> 0.91 ms, decode 5.40 -> 4.55 ms |
+| frame-package submit | retired: within noise after the gate |
+| near-zero poll budget | retired: within noise after the gate |
+| VE clock (`nVeFreq`) | closed: 2x clock changed nothing |
+| `bNoBFrames` / `smooth` / `display` / `drop_b_delay` | not pursued: the gate already removed the reorder delay |
+| vendor `NV12` output | closed: the request is ignored |
+| three-plane dma-buf import | open, de-risked: layout proven byte-for-byte, presenter is the work |
+
 ## Native Cedar hardware decode (pin-only rung)
 
 The port installs a fifth decoder rung, `native-cedar`, and config.env selects
