@@ -214,6 +214,14 @@ Four measurements decide that the first row is a hardware floor:
 5. The memory controller is already at its fastest operating point:
    `3120000.dmcfreq` reads 1200000000 with governor `performance` out of
    150/480/800/1200 MHz, so there is no memory OPP left to raise either.
+6. Waiting happens in no syscall at all: tracing `read`, `poll`, `epoll_wait`,
+   `futex`, `clock_nanosleep` and friends over a whole run (13051 calls) shows the
+   only multi-millisecond call is the session thread's own `epoll_pwait` idle.
+   Nothing blocks for anything like 2.8 ms per frame, so the vendor is spinning
+   in user space, not sleeping in the kernel.
+7. The bitstream is not the cost either: dropping the requested bitrate from
+   4000 to 1200 kbit/s moved the vendor wait from 2833 to 2689 us - 144 us, 5%,
+   for a visible quality loss.
 
 Every lever that could move that number has now been measured and closed, so the
 hardware wait is the device's throughput at 1280x720 and nothing in the client
