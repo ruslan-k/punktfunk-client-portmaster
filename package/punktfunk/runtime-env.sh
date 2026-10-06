@@ -43,6 +43,7 @@ export LD_LIBRARY_PATH="$RUNTIME:$GAMEDIR/libs:${LD_LIBRARY_PATH:-}"
 # follows the same route and volume plumbing as native emulators.
 if [ -x /mnt/SDCARD/spruce/scripts/asound-setup.sh ]; then
   /mnt/SDCARD/spruce/scripts/asound-setup.sh "$HOME" >/dev/null 2>&1 || true
+  python3 "$GAMEDIR/spruce-alsa-route.py" "$HOME/.asoundrc" || exit 1
 fi
 export PUNKTFUNK_ALSA_DEVICE=${PUNKTFUNK_ALSA_DEVICE:-default}
 
