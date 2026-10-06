@@ -8,6 +8,15 @@ pub(crate) fn supports_vendor(blob:&[u8])->bool {
  blob.get(SORT_GATE_OFFSET..SORT_GATE_OFFSET+SORT_GATE.len())==Some(SORT_GATE.as_slice())
  && blob.get(CONFIG_COPY_OFFSET..CONFIG_COPY_OFFSET+CONFIG_COPY.len())==Some(CONFIG_COPY.as_slice())
 }
+pub(crate) fn select(mode:i32,safe:bool,vendor:bool)->Result<bool,&'static str> {
+ match mode {
+  0=>Ok(false),
+  -1=>Ok(safe && vendor),
+  1 if safe && vendor=>Ok(true),
+  1=>Err("cedar: forced low-delay requires verified vendor and progressive POC type 2 without B slices"),
+  _=>Err("cedar: invalid low-delay selection"),
+ }
+}
 pub(crate) fn safe_stream(poc_type:u8,progressive:bool,has_b:bool)->bool {
  poc_type==2 && progressive && !has_b
 }
@@ -22,6 +31,15 @@ mod tests {
   assert!(supports_vendor(&b));
   b[SORT_GATE_OFFSET+4]^=1;assert!(!supports_vendor(&b));
   assert!(!supports_vendor(&[]));
+ }
+ #[test] fn auto_preserves_baseline_when_either_guard_is_absent() {
+  assert_eq!(select(-1,true,true),Ok(true));
+  assert_eq!(select(-1,false,true),Ok(false));
+  assert_eq!(select(-1,true,false),Ok(false));
+  assert_eq!(select(0,true,true),Ok(false));
+  assert!(select(1,false,true).is_err());
+  assert!(select(1,true,false).is_err());
+  assert_eq!(select(1,true,true),Ok(true));
  }
  #[test] fn stream_gate_refuses_reordering_and_interlacing() {
   assert!(safe_stream(2,true,false));

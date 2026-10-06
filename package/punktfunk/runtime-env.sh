@@ -110,6 +110,10 @@ python3 "$GAMEDIR/stream-defaults.py" \
 # down the standard ladder — software included — when the vendor stack is
 # absent or a decode-error streak forms; override in config.env or the env.
 export PUNKTFUNK_DECODER=${PUNKTFUNK_DECODER:-native-cedar}
+# Auto only bypasses the output hold gate for a byte-pinned vendor and a
+# planner-verified progressive zero-reorder stream. Otherwise keep the baseline.
+export PUNKTFUNK_CEDAR_LOW_DELAY=${PUNKTFUNK_CEDAR_LOW_DELAY:-auto}
+export PUNKTFUNK_CEDAR_POLL_US=${PUNKTFUNK_CEDAR_POLL_US:-5000}
 export RUST_LOG=${RUST_LOG:-info}
 
 if [ -n "${sdl_controllerconfig:-}" ]; then

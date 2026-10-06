@@ -23,6 +23,26 @@ class LowDelayTests(unittest.TestCase):
         self.assertEqual(Config.common_config_flags_192.offset,192)
         self.assertEqual(Config.n_align_stride.offset,88)
 
+    def test_runtime_defaults_and_explicit_rollback_are_exercised(self):
+        import os
+        import shutil
+        import subprocess
+        import tempfile
+        scratch=pathlib.Path(os.environ.get('TMPDIR',str(ROOT/'build/test-tmp')))
+        scratch.mkdir(parents=True,exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=scratch) as temp:
+            game=pathlib.Path(temp)/'punktfunk'
+            shutil.copytree(ROOT/'package/punktfunk',game)
+            env=os.environ.copy()
+            env['GAMEDIR']=str(game)
+            for key in ['PUNKTFUNK_CEDAR_LOW_DELAY','PUNKTFUNK_CEDAR_POLL_US']:
+                env.pop(key,None)
+            cmd=['bash','-c','source "$GAMEDIR/runtime-env.sh"; printf "%s/%s\\n" "$PUNKTFUNK_CEDAR_LOW_DELAY" "$PUNKTFUNK_CEDAR_POLL_US"']
+            normal=subprocess.run(cmd,env=env,text=True,capture_output=True,check=True)
+            self.assertEqual(normal.stdout.strip().splitlines()[-1],'auto/5000')
+            env.update(PUNKTFUNK_CEDAR_LOW_DELAY='0',PUNKTFUNK_CEDAR_POLL_US='0')
+            control=subprocess.run(cmd,env=env,text=True,capture_output=True,check=True)
+            self.assertEqual(control.stdout.strip().splitlines()[-1],'0/0')
     def test_candidate_is_opt_in_version_and_stream_guarded(self):
         tuning=(ROOT/'patches/cedar_tuning.rs').read_text()
         self.assertIn('PUNKTFUNK_CEDAR_LOW_DELAY', tuning)

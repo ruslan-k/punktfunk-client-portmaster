@@ -25,6 +25,8 @@ fn async_controls_are_opt_in_and_bounded() {
     assert_eq!((baseline.poll_budget_us,baseline.append_aud,baseline.low_delay),(0,0,0));
     let low=CedarTuning::from_lookup(|k|if k=="PUNKTFUNK_CEDAR_LOW_DELAY" {Some("1".into())} else {None}).unwrap();
     assert_eq!((low.low_delay,low.poll_budget_us,low.no_b_frames),(1,0,0));
+    let auto=CedarTuning::from_lookup(|k|if k=="PUNKTFUNK_CEDAR_LOW_DELAY" {Some("auto".into())} else {None}).unwrap();
+    assert_eq!(auto.low_delay,-1);
     assert!(CedarTuning::from_lookup(|k|if k=="PUNKTFUNK_CEDAR_LOW_DELAY" {Some("2".into())} else {None}).is_err());
     let t=CedarTuning::from_lookup(|k|match k { "PUNKTFUNK_CEDAR_POLL_US"=>Some("5000".into()),"PUNKTFUNK_CEDAR_AUD"=>Some("1".into()),_=>None }).unwrap();
     assert_eq!((t.poll_budget_us,t.append_aud),(5000,1));

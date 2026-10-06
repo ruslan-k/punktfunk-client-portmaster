@@ -764,12 +764,14 @@ impl NativeCedarDecoder {
         self.drop_b_delay = tune.drop_b_delay;
         self.poll_budget_us = tune.poll_budget_us as u64;
         self.append_aud = tune.append_aud == 1;
-        if tune.low_delay == 1 {
-            if !self.zero_reorder_verified { bail!("cedar: low-delay needs progressive H.264 POC type 2 without B slices"); }
-            let vendor = std::fs::read("/usr/lib/libawh264.so")
-                .context("cedar: read vendor implementation for low-delay guard")?;
-            if !low_delay::supports_vendor(&vendor) { bail!("cedar: low-delay vendor instruction signature mismatch"); }
-            self.low_delay = true;
+        if tune.low_delay != 0 {
+            let vendor_ok = std::fs::read("/usr/lib/libawh264.so").ok()
+                .is_some_and(|vendor| low_delay::supports_vendor(&vendor));
+            self.low_delay = low_delay::select(tune.low_delay, self.zero_reorder_verified, vendor_ok)
+                .map_err(|e| anyhow!(e))?;
+            tracing::info!(target: "cedar", mode = tune.low_delay, vendor_verified = vendor_ok,
+                stream_verified = self.zero_reorder_verified, enabled = self.low_delay,
+                "cedar-low-delay-selection");
         }
         // SAFETY: plain-data structs of integers and pointers; an all-zero
         // value is the vendor header's own "unset" state.

@@ -29,7 +29,10 @@ impl CedarTuning {
             drop_b_delay:number(get("PUNKTFUNK_CEDAR_DROP_B_DELAY"),0,0,1)?,
             poll_budget_us:number(get("PUNKTFUNK_CEDAR_POLL_US"),0,0,10000)?,
             append_aud:number(get("PUNKTFUNK_CEDAR_AUD"),0,0,1)?,
-            low_delay:number(get("PUNKTFUNK_CEDAR_LOW_DELAY"),0,0,1)?,
+            low_delay:match get("PUNKTFUNK_CEDAR_LOW_DELAY") {
+                Some(v) if v=="auto"=>-1,
+                v=>number(v,0,0,1)?,
+            },
         })
     }
 }

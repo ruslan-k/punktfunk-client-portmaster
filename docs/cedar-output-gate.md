@@ -1,6 +1,7 @@
 # Cedar output-hold gate candidate
 
-Status: opt-in diagnostic; not enabled for ordinary launches pending live A/B.
+Status: live one-axis A/B passed. Runtime defaults now request guarded `auto` and
+bounded 5000 us polling; explicit 0/0 restores the original vendor path.
 
 Read-only analysis of the actual TSPS libraries found a previously untranscribed
 VConfig word. No firmware, library instruction, or reference-picture data is patched.
@@ -18,7 +19,36 @@ VConfig word. No firmware, library instruction, or reference-picture data is pat
 - Structure size stays 216 bytes and all prior field offsets are preserved.
 
 Controls keep the default word zero. All existing vendor knobs remain unchanged.
-The first comparison keeps bounded async polling fixed at 5000 us and varies only
-this gate; logs retain exact output PTS correlation. A reduction of work alone is
-not a latency result: decoded/displayed FPS, lag census, decode/E2E, and physical
-DRM frames must also be verified.
+The comparison keeps bounded async polling fixed at 5000 us and varies only
+this gate; logs retain exact output PTS correlation. The default `auto` enables
+the gate only when both vendor and stream checks pass; otherwise the prior
+configuration is retained. Strict 1 refuses an unsupported vendor/stream.
+
+## Live A/B: CI build 4c48a1f
+
+Quiet 1280x720 H.264 desktop scene, actual reception about 19.8 FPS.
+Only the VConfig+192 word varied; poll budget remained 5000 us.
+
+Latencies below are sample-weighted means, not an inferred global P50.
+
+### gate-control
+- decode: 105.822 ms; E2E: 114.356 ms.
+- received/decoded/presented medians: [19.822, 19.822, 19.822] FPS.
+- AU-to-output lag histogram [0,1,2,3,4+]: [0, 1, 1392, 0, 0].
+- Close: `aus=1395 frames=1393 empties=2 errors=0 pts_matches=1393 pts_unmatched=0 pts_outstanding=2 output_lag_frames=[0, 1, 1392, 0, 0]`.
+- Log SHA-256: `c935e5a4dfe35778dec2d5ae4011d2cce54abe40cbcfccd6f9da1b8ceb6bec90`.
+- lost=0; skipped=0; session_exit=0.
+
+### gate-one
+- decode: 4.976 ms; E2E: 13.628 ms.
+- received/decoded/presented medians: [19.822, 19.841, 19.841] FPS.
+- AU-to-output lag histogram [0,1,2,3,4+]: [1396, 0, 0, 0, 0].
+- Close: `aus=1396 frames=1396 empties=0 errors=0 pts_matches=1396 pts_unmatched=0 pts_outstanding=0 output_lag_frames=[1396, 0, 0, 0, 0]`.
+- Log SHA-256: `6a6f8371085ddc6a8ea48809fedcd4af694ac65b1beb3bc315c910270989a355`.
+- lost=0; skipped=0; session_exit=0.
+
+Both real KMS frames are clean and show native-cedar. MainUI returned after each
+bounded run. No system library was modified. Paired state was preserved.
+
+This is a desktop-stream decode/display result, not a verified gameplay or
+input-to-photon benchmark. Final ordinary-launch verification is tracked separately.
