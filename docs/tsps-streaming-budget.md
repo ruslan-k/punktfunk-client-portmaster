@@ -355,7 +355,25 @@ surfaced at create rather than as a clean refusal - the query is not sufficient
 here, and a driver that refuses create after answering the query is exactly the
 case the demotion ladder exists for.
 
-What is NOT yet known, and must be measured with the device extension enabled
+A device-side probe with a device created (so the extension is actually enabled)
+answered most of it: the driver ACCEPTS every combination tried, including exactly
+the one the presenter refuses - R8_UNORM 640x360 with a DMA_BUF_EXT chain at
+offset 1152000 and stride 640 returns VK_SUCCESS, as do offsets 0 / 921600 /
+1152000 / 1155072 / 1382400 and extents 1280x720 / 640x368 / 512x512 / 256x256 /
+64x64. So this is not a size, offset-alignment or modifier limitation.
+
+The device extension census: VK_EXT_external_memory_dma_buf, VK_KHR_external_memory_fd
+and VK_EXT_image_drm_format_modifier are all present; VK_KHR_queue_family_foreign is
+absent (ARM exposes VK_EXT_queue_family_foreign instead). The presenter's setup log
+does NOT print "device lacks the dmabuf import extensions", so its extension set was
+enabled and this is not the gate either.
+
+What remains is the exact parameter tuple the presenter passes. The next build names
+it: the import failure now carries offset and stride alongside the extent, format and
+modifier, because ERROR_INVALID_DRM_FORMAT_MODIFIER_PLANE_LAYOUT_EXT is a complaint
+about the LAYOUT and the extent alone does not identify it.
+
+Original note, kept because it is still the reason a plain probe misleads:
 (a plain `vkGetPhysicalDeviceFormatProperties2` probe reports zero modifiers
 because `VK_EXT_image_drm_format_modifier` is not enabled without a device):
 whether any (format, extent, modifier) combination imports these planes, or
