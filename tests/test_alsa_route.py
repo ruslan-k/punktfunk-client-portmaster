@@ -10,6 +10,17 @@ ROOT = Path(__file__).resolve().parents[1]
 HELPER = ROOT / 'package/punktfunk/spruce-alsa-route.py'
 
 class AlsaRoute(unittest.TestCase):
+    def test_missing_dmix_group_uses_numeric_process_gid(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp)
+            rc = p / '.asoundrc'
+            rc.write_text('pcm.spruce_speaker { type asym playback.pcm "Playback" }\n')
+            config = p / 'alsa.conf'
+            config.write_text('defaults.pcm.ipc_gid "punktfunk_nonexistent_group"\npcm.dmix { type null }\n<' + str(rc) + '>\n')
+            subprocess.run(['python3', str(HELPER), str(rc)],
+                           env=dict(os.environ, HOME=tmp, ALSA_CONFIG_PATH=str(config)), check=True)
+            self.assertIn('defaults.pcm.ipc_gid ' + str(os.getgid()), rc.read_text())
+
     def test_missing_playback_is_repaired_without_changing_bluetooth_default(self):
         self.assertTrue(HELPER.exists(), 'missing firmware ALSA route repair')
         with tempfile.TemporaryDirectory() as tmp:
