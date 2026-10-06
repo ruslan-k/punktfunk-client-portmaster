@@ -501,6 +501,8 @@ pub(crate) struct NativeCedarDecoder {
     zero_reorder_verified: bool,
     dmabuf_probe: bool,
     probed_fds: Vec<c_int>,
+    /// Diagnostic only: duplicate the picture copy to add known memory traffic.
+    copy_twice: bool,
     output_lag_frames: [u64; 5],
     pts_probe: bool,
     pts_ledger: PtsLedger<SubmittedPicture>,
@@ -584,6 +586,7 @@ impl NativeCedarDecoder {
             zero_reorder_verified: false,
             dmabuf_probe: std::env::var("PUNKTFUNK_CEDAR_DMABUF_PROBE").as_deref() == Ok("1"),
             probed_fds: Vec::new(),
+            copy_twice: false,
             output_lag_frames: [0; 5],
             pts_probe: std::env::var("PUNKTFUNK_CEDAR_PTS_PROBE").as_deref() == Ok("1"),
             pts_ledger: PtsLedger::default(),
@@ -810,11 +813,12 @@ impl NativeCedarDecoder {
         // cedarc log reports as ve_default_freq; the client never raises it on
         // its own, and an unsupported value is the vendor driver's call.
         storage.config.n_ve_freq = tune.ve_freq_mhz.max(0) as c_uint;
+        self.copy_twice = tune.copy_twice == 1;
         tracing::info!(target: "cedar", low_delay = self.low_delay, no_b_frames = tune.no_b_frames,
             frame_package = tune.frame_package, smooth = tune.smooth, display = tune.display,
             drop_b_delay = tune.drop_b_delay, immediate_handoff = self.immediate_handoff,
             poll_us = tune.poll_budget_us, append_aud = self.append_aud,
-            ve_freq_mhz = tune.ve_freq_mhz, pixfmt = tune.pixfmt,
+            ve_freq_mhz = tune.ve_freq_mhz, pixfmt = tune.pixfmt, copy_twice = tune.copy_twice,
             "cedar: candidate configuration (one-axis A/B controls)");
 
         // SAFETY: `handle` is live; `info` and `storage` are live locals the
@@ -1187,6 +1191,12 @@ impl NativeCedarDecoder {
         unsafe { packed.set_len(total_len) };
         if self.dmabuf_probe && p.n_buf_fd >= 0 {
             self.probe_dmabuf(p.n_buf_fd, width, height, &packed, y_len, c_len);
+        }
+        if self.copy_twice {
+            // Diagnostic only: a second pass over the same payload adds a known
+            // amount of memory traffic without changing the frame that ships.
+            let scratch = packed.clone();
+            std::hint::black_box(&scratch);
         }
         if !self.format_logged {
             self.format_logged = true;

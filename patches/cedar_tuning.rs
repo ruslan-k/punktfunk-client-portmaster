@@ -14,6 +14,10 @@ pub(crate) struct CedarTuning {
     /// `VConfig.eOutputPixelFormat` request (1 = planar 420, 6 = NV12). The FBM
     /// reports the format it actually delivers, so this is a request, not a promise.
     pub pixfmt:i32,
+    /// Diagnostic: duplicate the picture copy to add known memory traffic. If the
+    /// vendor wait grows with it, the path is bandwidth-limited and removing the
+    /// copy will speed up the hardware too.
+    pub copy_twice:i32,
 }
 impl CedarTuning {
     pub fn from_lookup(mut get:impl FnMut(&str)->Option<String>) -> Result<Self,&'static str> {
@@ -40,6 +44,7 @@ impl CedarTuning {
             },
             ve_freq_mhz:number(get("PUNKTFUNK_CEDAR_VE_FREQ"),0,0,1152)?,
             pixfmt:number(get("PUNKTFUNK_CEDAR_PIXFMT"),1,1,6)?,
+            copy_twice:number(get("PUNKTFUNK_CEDAR_COPY_TWICE"),0,0,1)?,
         })
     }
 }
