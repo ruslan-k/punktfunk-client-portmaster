@@ -146,6 +146,20 @@ EDITS = [
         '        planes: p.planes,\n'
         '        planar: p.planar,\n',
     ),
+    (
+        'import failure context',
+        '    .with_context(|| {\n'
+        '        format!("create {width}x{height} {format:?} image (modifier {modifier:#018x})")\n'
+        '    })?;\n',
+        '    .with_context(|| {\n'
+        '        // This driver refuses the plane LAYOUT, not the modifier, so name every\n'
+        '        // field of it: the extent alone does not identify the combination.\n'
+        '        format!(\n'
+        '            "create {width}x{height} {format:?} image (modifier {modifier:#018x}, offset \\\n'
+        '             {offset}, stride {stride})"\n'
+        '        )\n'
+        '    })?;\n',
+    ),
 ]
 
 PRESENT_EDITS = [
