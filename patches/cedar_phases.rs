@@ -1,6 +1,10 @@
 //! Opt-in, bounded Cedar phase counters; no per-frame logging or payloads.
 use std::time::Instant;
 use std::collections::VecDeque;
+pub(crate) fn poll_picture<T>(pending: &mut VecDeque<T>) -> Option<T> { pending.pop_front() }
+pub(crate) fn note_lag(hist: &mut [u64; 5], input: u64, source: u64) {
+    hist[input.saturating_sub(source).min(4) as usize] += 1;
+}
 
 /// Keep all decoded pictures in FIFO mode; retain the exact original policy for A/B.
 pub(crate) fn queue_picture<T>(pending: &mut VecDeque<T>, newest: &mut Option<T>,
@@ -61,6 +65,20 @@ impl PhaseStats {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn ready_burst_can_be_handed_on_without_another_network_au() {
+        let mut queue = VecDeque::from([(10, 1000), (11, 2000)]);
+        assert_eq!(poll_picture(&mut queue), Some((10, 1000)));
+        assert_eq!(poll_picture(&mut queue), Some((11, 2000)));
+        assert_eq!(poll_picture(&mut queue), None);
+        assert!(queue.is_empty());
+    }
+    #[test]
+    fn lag_histogram_counts_exact_source_au_distance() {
+        let mut hist = [0; 5];
+        for source in [100, 99, 98, 97, 96, 80] { note_lag(&mut hist, 100, source); }
+        assert_eq!(hist, [1, 1, 1, 1, 2]);
+    }
     #[test]
     fn fifo_burst_preserves_all_pictures_and_their_order() {
         let mut queue = VecDeque::new();

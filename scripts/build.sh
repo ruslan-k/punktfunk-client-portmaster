@@ -112,6 +112,7 @@ echo "==> install the native Cedar decoder rung"
 python3 "$ROOT/scripts/patch-cedar.py" "$SRC/punktfunk" "$ROOT"
 python3 "$ROOT/scripts/patch-cedar-phases.py" "$SRC/punktfunk" "$ROOT"
 python3 "$ROOT/scripts/patch-cedar-pts.py" "$SRC/punktfunk"
+python3 "$ROOT/scripts/patch-cedar-ready.py" "$SRC/punktfunk"
 
 echo "==> cross-build Punktfunk CLI + gamepad console session"
 export PATH="/root/.cargo/bin:$PATH"

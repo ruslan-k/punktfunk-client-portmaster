@@ -482,6 +482,8 @@ pub(crate) struct NativeCedarDecoder {
     logged_at: u64,
     profile: Option<PhaseStats>,
     output_fifo: bool,
+    immediate_handoff: bool,
+    output_lag_frames: [u64; 5],
     pts_probe: bool,
     pts_ledger: PtsLedger<SubmittedPicture>,
     pts_clock: TokenClock,
@@ -554,6 +556,8 @@ impl NativeCedarDecoder {
             // Device A/B proved newest-wins discarded half the pictures.
             // Default FIFO; explicit 0 retains the old control for diagnostics.
             output_fifo: std::env::var("PUNKTFUNK_CEDAR_FIFO").as_deref() != Ok("0"),
+            immediate_handoff: std::env::var("PUNKTFUNK_CEDAR_HANDOFF").as_deref() != Ok("0"),
+            output_lag_frames: [0; 5],
             pts_probe: std::env::var("PUNKTFUNK_CEDAR_PTS_PROBE").as_deref() == Ok("1"),
             pts_ledger: PtsLedger::default(),
             pts_clock: TokenClock::default(),
@@ -577,6 +581,15 @@ impl NativeCedarDecoder {
     }
     pub(crate) fn take_output_stamp(&mut self) -> Option<FrameStamp> {
         self.output_stamp.take()
+    }
+
+    /// Already copied pictures only: no AU feed, vendor call, wait, or metadata guess.
+    pub(crate) fn poll_ready(&mut self) -> Option<CpuPlanarFrame> {
+        if !self.immediate_handoff { return None; }
+        let output = phases::poll_picture(&mut self.pending)?;
+        self.frames_out += 1;
+        self.output_stamp = output.stamp;
+        Some(output.frame)
     }
 
     pub(crate) fn decode(&mut self, au: &[u8]) -> Result<Option<CpuPlanarFrame>> {
@@ -951,6 +964,7 @@ impl NativeCedarDecoder {
         }
         let source = source.ok_or_else(|| anyhow!(
             "cedar: unmatched output PTS; refusing FIFO-order guess (pts={})", p.n_pts))?;
+        phases::note_lag(&mut self.output_lag_frames, self.aus, source.source_au);
         if self.profile.is_some() && (self.aus <= 8 || self.aus.is_multiple_of(120)) {
             tracing::info!(target: "cedar", au = self.aus, slot = p.n_id, pts = p.n_pts,
                 progressive = p.b_is_progressive, top_field_first = p.b_top_field_first,
@@ -1052,6 +1066,7 @@ impl Drop for NativeCedarDecoder {
             aus = self.aus, frames = self.frames_out, empties = self.empties, errors = self.errors,
             pts_matches = self.pts_matches, pts_unmatched = self.pts_unmatched,
             pts_outstanding = self.pts_ledger.len(),
+            output_lag_frames = ?self.output_lag_frames,
             "cedar: decoder closed");
     }
 }
