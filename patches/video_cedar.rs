@@ -442,6 +442,33 @@ impl CedarLibs {
     }
 }
 
+/// Returns one vendor picture to the decoder once the GPU has finished reading
+/// it. The presenter drops this on its own thread after the sampling fence
+/// signals, so the token travels back over a channel and the decoder thread makes
+/// the vendor call: the vendor stack is not thread-safe, and every other call
+/// into it happens on that thread.
+pub(crate) struct CedarFrameGuard {
+    token: u64,
+    release: std::sync::mpsc::Sender<u64>,
+}
+
+impl CedarFrameGuard {
+    pub(crate) fn new(token: u64, release: std::sync::mpsc::Sender<u64>) -> Self {
+        Self { token, release }
+    }
+
+    pub(crate) fn token(&self) -> u64 {
+        self.token
+    }
+}
+
+impl Drop for CedarFrameGuard {
+    fn drop(&mut self) {
+        // A closed channel means the decoder is already gone, and the picture with it.
+        let _ = self.release.send(self.token);
+    }
+}
+
 /// How one vendor result moves the drain loop.
 enum DrainStep {
     /// Ask the decoder again (bounded by the loop's round cap).
@@ -1594,6 +1621,33 @@ fn copy_interleaved_chroma_into(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The release guard is what makes zero-copy safe: the vendor picture must go
+    /// back only after the GPU stops reading it, and only on the decoder thread.
+    #[test]
+    fn the_release_guard_sends_its_token_when_the_presenter_drops_it() {
+        let (tx, rx) = std::sync::mpsc::channel::<u64>();
+        {
+            let _guard = CedarFrameGuard::new(41, tx.clone());
+        }
+        assert_eq!(rx.try_recv().ok(), Some(41));
+
+        // Dropping after the decoder is gone must not panic or block.
+        drop(rx);
+        drop(CedarFrameGuard::new(42, tx));
+    }
+
+    /// The presenter owns the guard on its own thread, so it has to be sendable.
+    #[test]
+    fn the_release_guard_can_travel_to_the_presenter_thread() {
+        fn assert_send<T: Send>() {}
+        assert_send::<CedarFrameGuard>();
+
+        let (tx, rx) = std::sync::mpsc::channel::<u64>();
+        let handle = std::thread::spawn(move || drop(CedarFrameGuard::new(7, tx)));
+        handle.join().expect("presenter thread");
+        assert_eq!(rx.try_recv().ok(), Some(7));
+    }
 
     /// The six constants the session's `stats:` line and pin resolution key on.
     #[test]

@@ -7,7 +7,7 @@ import unittest
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 PATCHER = ROOT / "scripts/patch-cedar.py"
 
-# The seven anchors live in the pinned upstream revision
+# The eight anchors live in the pinned upstream revision
 # (sources.env PUNKTFUNK_REF) and are asserted unique by the patcher itself.
 LIB_ANCHOR = '#[cfg(all(desktop, target_os = "linux"))]\npub mod video_vaapi_native;\n'
 ENUM_ANCHOR = '    NativeV4l2(Box<crate::video_v4l2::NativeV4l2Decoder>),\n'
@@ -21,6 +21,12 @@ LOGRUNG_ANCHOR = (
     '        ),\n'
 )
 PACKED_ANCHOR = '    /// Take three already tight planes. Refuses a plane whose length is not\n'
+GUARD_ANCHOR = (
+    'pub(crate) enum FrameGuard {\n'
+    '    Va(crate::video_vaapi_native::VaFrameGuard),\n'
+    '    V4l2(crate::video_v4l2::V4l2FrameGuard),\n'
+    '}\n'
+)
 
 
 def fixture_tree(root: pathlib.Path) -> None:
@@ -34,7 +40,8 @@ def fixture_tree(root: pathlib.Path) -> None:
         + DECODE_ANCHOR + "mid3\n"
         + WHICH_ANCHOR + "mid4\n"
         + LOGRUNG_ANCHOR + "mid5\n"
-        + PACKED_ANCHOR + "suffix\n"
+        + PACKED_ANCHOR + "mid6\n"
+        + GUARD_ANCHOR + "suffix\n"
     )
 
 

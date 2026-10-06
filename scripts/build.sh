@@ -113,6 +113,9 @@ python3 "$ROOT/scripts/patch-cedar.py" "$SRC/punktfunk" "$ROOT"
 python3 "$ROOT/scripts/patch-cedar-phases.py" "$SRC/punktfunk" "$ROOT"
 python3 "$ROOT/scripts/patch-cedar-pts.py" "$SRC/punktfunk"
 python3 "$ROOT/scripts/patch-cedar-ready.py" "$SRC/punktfunk"
+# The presenter half of zero-copy: a three-plane planar dma-buf import. Inert
+# until a decoder exports one, but compiled and checked here.
+python3 "$ROOT/scripts/patch-presenter-planar.py" "$SRC/punktfunk"
 
 echo "==> cross-build Punktfunk CLI + gamepad console session"
 export PATH="/root/.cargo/bin:$PATH"

@@ -2,7 +2,7 @@
 """Wire the native-cedar decoder rung into the pinned Punktfunk source.
 
 Installs `patches/video_cedar.rs` next to the other pf-client-core sources and
-applies seven surgical edits (one in `lib.rs`, six in `video.rs`). Each edit's
+applies eight surgical edits (one in `lib.rs`, seven in `video.rs`). Each edit's
 anchor must occur exactly once in the pinned revision; a mismatch fails before
 anything is written, so a half-patched tree cannot reach the compiler.
 
@@ -128,6 +128,25 @@ PACKED_NEW = (
     "\n"
 ) + PACKED_OLD
 
+# The zero-copy release guard: the presenter holds it until its sampling fence
+# signals, then drops it on its own thread and the token comes back here.
+GUARD_OLD = (
+    "pub(crate) enum FrameGuard {\n"
+    "    Va(crate::video_vaapi_native::VaFrameGuard),\n"
+    "    V4l2(crate::video_v4l2::V4l2FrameGuard),\n"
+    "}\n"
+)
+GUARD_NEW = (
+    "pub(crate) enum FrameGuard {\n"
+    "    Va(crate::video_vaapi_native::VaFrameGuard),\n"
+    "    V4l2(crate::video_v4l2::V4l2FrameGuard),\n"
+    "    /// Cedar holds its picture until the presenter's fence signals; the guard\n"
+    "    /// sends the token back so the decoder thread makes the vendor call.\n"
+    "    #[cfg(target_os = \"linux\")]\n"
+    "    Cedar(crate::video_cedar::CedarFrameGuard),\n"
+    "}\n"
+)
+
 EDITS = [
     ("lib.rs module declaration", LIB_OLD, LIB_NEW),
     ("Backend enum arm", ENUM_OLD, ENUM_NEW),
@@ -136,6 +155,7 @@ EDITS = [
     ("decode dispatch arm", DECODE_OLD, DECODE_NEW),
     ("demotion log arm", WHICH_OLD, WHICH_NEW),
     ("log_rung arm", LOGRUNG_OLD, LOGRUNG_NEW),
+    ("FrameGuard enum arm", GUARD_OLD, GUARD_NEW),
 ]
 
 
@@ -172,7 +192,7 @@ def main() -> None:
     shutil.copyfile(module_src, src / "video_cedar.rs")
     for path, text in writes.items():
         path.write_text(text, encoding="utf-8")
-    print("cedar patch: video_cedar.rs installed, 7 upstream edits applied")
+    print("cedar patch: video_cedar.rs installed, 8 upstream edits applied")
 
 
 if __name__ == "__main__":
