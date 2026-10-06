@@ -20,6 +20,14 @@ fn each_candidate_changes_only_its_single_axis() {
     }
 }
 #[test]
+fn async_controls_are_opt_in_and_bounded() {
+    let baseline=CedarTuning::from_lookup(|_|None).unwrap();
+    assert_eq!((baseline.poll_budget_us,baseline.append_aud),(0,0));
+    let t=CedarTuning::from_lookup(|k|match k { "PUNKTFUNK_CEDAR_POLL_US"=>Some("5000".into()),"PUNKTFUNK_CEDAR_AUD"=>Some("1".into()),_=>None }).unwrap();
+    assert_eq!((t.poll_budget_us,t.append_aud),(5000,1));
+    assert!(CedarTuning::from_lookup(|k|if k=="PUNKTFUNK_CEDAR_POLL_US" {Some("20000".into())} else {None}).is_err());
+}
+#[test]
 fn unsafe_or_malformed_candidate_is_refused() {
     for (name,value) in [("PUNKTFUNK_CEDAR_NO_B","2"),("PUNKTFUNK_CEDAR_SMOOTH","0"),("PUNKTFUNK_CEDAR_DISPLAY","-1"),("PUNKTFUNK_CEDAR_SMOOTH","99"),("PUNKTFUNK_CEDAR_FRAME_PACKAGE","true")] {
         assert!(CedarTuning::from_lookup(|k|if k==name {Some(value.into())} else {None}).is_err());

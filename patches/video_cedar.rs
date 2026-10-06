@@ -43,6 +43,8 @@ pub(crate) use pts::FrameStamp;
 #[path = "cedar_tuning.rs"]
 mod tuning;
 use tuning::CedarTuning;
+#[path = "cedar_async.rs"]
+mod async_parser;
 
 use anyhow::anyhow;
 use anyhow::bail;
@@ -487,6 +489,8 @@ pub(crate) struct NativeCedarDecoder {
     output_fifo: bool,
     immediate_handoff: bool,
     drop_b_delay: c_int,
+    poll_budget_us: u64,
+    append_aud: bool,
     output_lag_frames: [u64; 5],
     pts_probe: bool,
     pts_ledger: PtsLedger<SubmittedPicture>,
@@ -564,6 +568,8 @@ impl NativeCedarDecoder {
             // Keep opt-in until the vendor's output cadence is one picture per AU.
             immediate_handoff: std::env::var("PUNKTFUNK_CEDAR_HANDOFF").as_deref() == Ok("1"),
             drop_b_delay: 0,
+            poll_budget_us: 0,
+            append_aud: false,
             output_lag_frames: [0; 5],
             pts_probe: std::env::var("PUNKTFUNK_CEDAR_PTS_PROBE").as_deref() == Ok("1"),
             pts_ledger: PtsLedger::default(),
@@ -658,6 +664,7 @@ impl NativeCedarDecoder {
         if facts.is_idr {
             self.anchored = true;
         }
+        if self.append_aud { self.submit_aud_delimiter()?; }
         if let Some(frame) = self.drain()? {
             self.pending.push_back(frame);
         }
@@ -736,6 +743,8 @@ impl NativeCedarDecoder {
     fn initialize(&mut self, width: u32, height: u32) -> Result<()> {
         let tune = CedarTuning::from_lookup(|k| std::env::var(k).ok()).map_err(|e| anyhow!(e))?;
         self.drop_b_delay = tune.drop_b_delay;
+        self.poll_budget_us = tune.poll_budget_us as u64;
+        self.append_aud = tune.append_aud == 1;
         // SAFETY: plain-data structs of integers and pointers; an all-zero
         // value is the vendor header's own "unset" state.
         let mut info: VideoStreamInfo = unsafe { std::mem::zeroed() };
@@ -765,6 +774,7 @@ impl NativeCedarDecoder {
         tracing::info!(target: "cedar", no_b_frames = tune.no_b_frames,
             frame_package = tune.frame_package, smooth = tune.smooth, display = tune.display,
             drop_b_delay = tune.drop_b_delay, immediate_handoff = self.immediate_handoff,
+            poll_us = tune.poll_budget_us, append_aud = self.append_aud,
             "cedar: candidate configuration (one-axis A/B controls)");
 
         // SAFETY: `handle` is live; `info` and `storage` are live locals the
@@ -881,11 +891,52 @@ impl NativeCedarDecoder {
         Ok(retired)
     }
 
+    /// Explicit non-VCL boundary packet. It has no picture identity and never
+    /// enters the PTS ledger. The original coded AU and its token stay unchanged.
+    fn submit_aud_delimiter(&mut self) -> Result<()> {
+        let bytes = async_parser::AUD_DELIMITER;
+        let mut buf: *mut c_char = std::ptr::null_mut();
+        let mut ring: *mut c_char = std::ptr::null_mut();
+        let mut first_len = 0;
+        let mut ring_len = 0;
+        // SAFETY: live decoder and writable scalar out-pointers; same ABI as feed_au.
+        let rc = unsafe { (self.libs.request_stream_buffer)(self.handle, bytes.len() as c_int,
+            &mut buf, &mut first_len, &mut ring, &mut ring_len, STREAM_INDEX) };
+        ensure!(rc >= 0 && first_len >= 0 && ring_len >= 0,
+            "cedar: delimiter buffer request failed");
+        ensure!(bytes.len() <= first_len as usize + ring_len as usize,
+            "cedar: delimiter buffer span too small");
+        let first = bytes.len().min(first_len as usize);
+        ensure!(first == 0 || !buf.is_null(), "cedar: delimiter primary buffer NULL");
+        ensure!(first == bytes.len() || !ring.is_null(), "cedar: delimiter ring buffer NULL");
+        // SAFETY: above checks bound both requested segments and validate their pointers.
+        unsafe {
+            if first > 0 { std::ptr::copy_nonoverlapping(bytes.as_ptr(), buf.cast::<u8>(), first); }
+            if first < bytes.len() { std::ptr::copy_nonoverlapping(bytes.as_ptr().add(first),
+                ring.cast::<u8>(), bytes.len() - first); }
+        }
+        // SAFETY: plain C data, valid zero/default pointers, filled before the submit call.
+        let mut data = unsafe { std::mem::zeroed::<VideoStreamDataInfo>() };
+        data.p_data = buf;
+        data.n_length = bytes.len() as c_int;
+        data.n_pts = async_parser::AUD_PTS;
+        data.n_pcr = -1;
+        data.b_is_first_part = 1;
+        data.b_is_last_part = 1;
+        data.b_valid = 1;
+        data.n_stream_index = STREAM_INDEX;
+        // SAFETY: same live handle/data contract as an ordinary AU submission.
+        let rc = unsafe { (self.libs.submit_stream_data)(self.handle, &mut data, STREAM_INDEX) };
+        ensure!(rc == 0, "cedar: delimiter submit failed rc={rc}");
+        Ok(())
+    }
+
     /// Run the vendor decoder until it has nothing more to do. Preserve every
     /// picture in the bounded output FIFO; newest-wins is diagnostic control only.
     fn drain(&mut self) -> Result<Option<CedarOutput>> {
         let mut newest: Option<CedarOutput> = None;
         let mut produced = 0usize;
+        let async_start = (self.poll_budget_us > 0).then(Instant::now);
         for _ in 0..DRAIN_ROUNDS {
             let begin = self.profile.as_ref().map(|_| Instant::now());
             // SAFETY: `handle` is live; the flags are the live-stream contract
@@ -909,7 +960,16 @@ impl NativeCedarDecoder {
                     }
                 }
                 VDECODE_RESULT_OK => {}
-                VDECODE_RESULT_CONTINUE | VDECODE_RESULT_NO_BITSTREAM => break,
+                VDECODE_RESULT_CONTINUE | VDECODE_RESULT_NO_BITSTREAM => {
+                    // The SBM parser runs on its own thread. An immediate empty
+                    // result does not mean the submitted complete AU is unavailable
+                    // until the next network frame; allow an opt-in bounded retry.
+                    if async_parser::retry_async(rc, produced, elapsed_us(async_start), self.poll_budget_us) {
+                        std::thread::sleep(std::time::Duration::from_micros(200));
+                        continue;
+                    }
+                    break;
+                },
                 VDECODE_RESULT_NO_FRAME_BUFFER => {
                     // Output buffers are all held — every picture this rung
                     // takes is returned right after its copy, so this is the

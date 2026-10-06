@@ -6,6 +6,8 @@ class CedarTuningIntegration(unittest.TestCase):
         src=(ROOT/'patches/video_cedar.rs').read_text()
         for marker in ['storage.config.b_no_b_frames = tune.no_b_frames','info.b_is_frame_package = tune.frame_package','storage.config.n_decode_smooth_frame_buffer_num = tune.smooth','storage.config.n_display_holding_frame_buffer_num = tune.display','self.drop_b_delay','cedar: candidate configuration']:
             self.assertIn(marker,src)
+        for marker in ['poll_budget_us:','append_aud:','async_parser::retry_async','async_parser::AUD_PTS','fn submit_aud_delimiter','cedar_tuning.rs']:
+            self.assertIn(marker,src)
         self.assertIn('CedarTuning::from_lookup',src)
         build=(ROOT/'scripts/build.sh').read_text()
         self.assertIn('cedar_tuning_tests.rs',build)

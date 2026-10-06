@@ -6,6 +6,8 @@ pub(crate) struct CedarTuning {
     pub smooth:i32,
     pub display:i32,
     pub drop_b_delay:i32,
+    pub poll_budget_us:i32,
+    pub append_aud:i32,
 }
 impl CedarTuning {
     pub fn from_lookup(mut get:impl FnMut(&str)->Option<String>) -> Result<Self,&'static str> {
@@ -24,6 +26,8 @@ impl CedarTuning {
             smooth:number(get("PUNKTFUNK_CEDAR_SMOOTH"),2,1,2)?,
             display:number(get("PUNKTFUNK_CEDAR_DISPLAY"),2,1,2)?,
             drop_b_delay:number(get("PUNKTFUNK_CEDAR_DROP_B_DELAY"),0,0,1)?,
+            poll_budget_us:number(get("PUNKTFUNK_CEDAR_POLL_US"),0,0,10000)?,
+            append_aud:number(get("PUNKTFUNK_CEDAR_AUD"),0,0,1)?,
         })
     }
 }

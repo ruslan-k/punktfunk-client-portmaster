@@ -42,8 +42,12 @@ def main():
     tuning_helper = port / 'patches/cedar_tuning.rs'
     if not tuning_helper.is_file():
         raise SystemExit('cedar phases: missing candidate helper; no writes')
+    async_helper = port / 'patches/cedar_async.rs'
+    if not async_helper.is_file():
+        raise SystemExit('cedar phases: missing async helper; no writes')
     text = text.replace(START, START_NEW).replace(DECODE, DECODE_NEW)
     shutil.copyfile(tuning_helper, src / 'cedar_tuning.rs')
+    shutil.copyfile(async_helper, src / 'cedar_async.rs')
     shutil.copyfile(pts_helper, src / 'cedar_pts.rs')
     shutil.copyfile(helper, src / 'cedar_phases.rs')
     path.write_text(text)
