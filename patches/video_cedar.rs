@@ -800,10 +800,15 @@ impl NativeCedarDecoder {
         storage.config.b_no_b_frames = tune.no_b_frames;
         storage.config.n_display_holding_frame_buffer_num = tune.display;
         storage.config.n_decode_smooth_frame_buffer_num = tune.smooth;
+        // Vendor units are MHz (CdcVeSetSpeed). Zero leaves the SoC default the
+        // cedarc log reports as ve_default_freq; the client never raises it on
+        // its own, and an unsupported value is the vendor driver's call.
+        storage.config.n_ve_freq = tune.ve_freq_mhz.max(0) as c_uint;
         tracing::info!(target: "cedar", low_delay = self.low_delay, no_b_frames = tune.no_b_frames,
             frame_package = tune.frame_package, smooth = tune.smooth, display = tune.display,
             drop_b_delay = tune.drop_b_delay, immediate_handoff = self.immediate_handoff,
             poll_us = tune.poll_budget_us, append_aud = self.append_aud,
+            ve_freq_mhz = tune.ve_freq_mhz,
             "cedar: candidate configuration (one-axis A/B controls)");
 
         // SAFETY: `handle` is live; `info` and `storage` are live locals the

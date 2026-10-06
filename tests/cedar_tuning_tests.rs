@@ -4,19 +4,20 @@ use tuning::CedarTuning;
 #[test]
 fn missing_options_preserve_verified_vendor_baseline() {
     let t=CedarTuning::from_lookup(|_|None).unwrap();
-    assert_eq!((t.no_b_frames,t.frame_package,t.smooth,t.display,t.drop_b_delay),(0,0,2,2,0));
+    assert_eq!((t.no_b_frames,t.frame_package,t.smooth,t.display,t.drop_b_delay,t.ve_freq_mhz),(0,0,2,2,0,0));
 }
 #[test]
 fn each_candidate_changes_only_its_single_axis() {
     for (name,value,expected) in [
-        ("PUNKTFUNK_CEDAR_NO_B","1",(1,0,2,2,0)),
-        ("PUNKTFUNK_CEDAR_FRAME_PACKAGE","1",(0,1,2,2,0)),
-        ("PUNKTFUNK_CEDAR_SMOOTH","1",(0,0,1,2,0)),
-        ("PUNKTFUNK_CEDAR_DISPLAY","1",(0,0,2,1,0)),
-        ("PUNKTFUNK_CEDAR_DROP_B_DELAY","1",(0,0,2,2,1)),
+        ("PUNKTFUNK_CEDAR_NO_B","1",(1,0,2,2,0,0)),
+        ("PUNKTFUNK_CEDAR_FRAME_PACKAGE","1",(0,1,2,2,0,0)),
+        ("PUNKTFUNK_CEDAR_SMOOTH","1",(0,0,1,2,0,0)),
+        ("PUNKTFUNK_CEDAR_DISPLAY","1",(0,0,2,1,0,0)),
+        ("PUNKTFUNK_CEDAR_DROP_B_DELAY","1",(0,0,2,2,1,0)),
+        ("PUNKTFUNK_CEDAR_VE_FREQ","696",(0,0,2,2,0,696)),
     ] {
         let t=CedarTuning::from_lookup(|k|if k==name {Some(value.into())} else {None}).unwrap();
-        assert_eq!((t.no_b_frames,t.frame_package,t.smooth,t.display,t.drop_b_delay),expected);
+        assert_eq!((t.no_b_frames,t.frame_package,t.smooth,t.display,t.drop_b_delay,t.ve_freq_mhz),expected);
     }
 }
 #[test]
@@ -33,8 +34,15 @@ fn async_controls_are_opt_in_and_bounded() {
     assert!(CedarTuning::from_lookup(|k|if k=="PUNKTFUNK_CEDAR_POLL_US" {Some("20000".into())} else {None}).is_err());
 }
 #[test]
+fn vendor_clock_request_is_opt_in_and_soc_default_stays_zero() {
+    let baseline=CedarTuning::from_lookup(|_|None).unwrap();
+    assert_eq!(baseline.ve_freq_mhz,0);
+    let asked=CedarTuning::from_lookup(|k|if k=="PUNKTFUNK_CEDAR_VE_FREQ" {Some("696".into())} else {None}).unwrap();
+    assert_eq!(asked.ve_freq_mhz,696);
+}
+#[test]
 fn unsafe_or_malformed_candidate_is_refused() {
-    for (name,value) in [("PUNKTFUNK_CEDAR_NO_B","2"),("PUNKTFUNK_CEDAR_SMOOTH","0"),("PUNKTFUNK_CEDAR_DISPLAY","-1"),("PUNKTFUNK_CEDAR_SMOOTH","99"),("PUNKTFUNK_CEDAR_FRAME_PACKAGE","true")] {
+    for (name,value) in [("PUNKTFUNK_CEDAR_NO_B","2"),("PUNKTFUNK_CEDAR_SMOOTH","0"),("PUNKTFUNK_CEDAR_DISPLAY","-1"),("PUNKTFUNK_CEDAR_SMOOTH","99"),("PUNKTFUNK_CEDAR_FRAME_PACKAGE","true"),("PUNKTFUNK_CEDAR_VE_FREQ","2000"),("PUNKTFUNK_CEDAR_VE_FREQ","-1")] {
         assert!(CedarTuning::from_lookup(|k|if k==name {Some(value.into())} else {None}).is_err());
     }
 }

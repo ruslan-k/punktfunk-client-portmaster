@@ -58,6 +58,49 @@ then verify audible sound and clean return to Spruce. Unit tests and successful
 CI do not prove the physical acceptance criteria. Record device results below
 only after the fresh test.
 
+
+## Packed copy and the remaining decode budget
+
+CI build `9e1e152` (single final I420 allocation, one `copy_nonoverlapping` per
+plane) measured on the device at 1280x720@60, shipped runtime defaults:
+
+- decode mean **4.551 ms** (clean run) / 4.617 ms (phase-profiled run) versus
+  5.402 ms on the previous build; capture-to-presentation 12.276 ms.
+- 6920 AUs, 6920 frames, 6920 exact PTS matches, 0 unmatched, 0 errors, lag
+  census all zero, 60.04 FPS received/decoded/presented, `lost 0`.
+
+Opt-in phase census (`PUNKTFUNK_CEDAR_PROFILE=1`, 57 windows, 6840 pictures):
+
+| stage | mean |
+| --- | --- |
+| 0 planner | 361 us |
+| 1 feed AU | 51 us |
+| 2 whole decode call | 4572 us |
+| 3 RequestPicture | 6 us |
+| 4 picture copy | **906 us** |
+| 5 ReturnPicture | 8 us |
+| vendor FRAME_DECODED | 2846 us |
+| vendor NO_BITSTREAM (2.1/AU) | 27 us |
+
+The copy dropped from about 3.6 ms to 0.91 ms, so the hardware wait is now the
+largest single item. A single `memcpy` of 1.382 MB in 0.9 ms is about 1.5 GB/s,
+which is what reading the vendor's frame buffer costs here; the remaining win is
+the DMA-BUF hand-off, not more copy tuning.
+
+Two one-axis candidates changed nothing measurable at this point:
+`PUNKTFUNK_CEDAR_FRAME_PACKAGE=1` (4.546 ms) and a 1 us poll budget (4.532 ms).
+With the output gate in place, complete-AU submits, frame packages and polling no
+longer move the number; all three kept lag 0 and 60 FPS.
+
+## VE clock
+
+`cedarc` on this SoC logs `ve_default_freq = 576` and calls `VeSetSpeed` with
+576 MHz; debugfs reports `ve` = 576 MHz under `pll-ve` = 1152 MHz, and the debugfs
+`clk_rate` file is read-only (writes are refused), so the clock cannot be probed
+by hand. `PUNKTFUNK_CEDAR_VE_FREQ` writes `VConfig.nVeFreq` (the vendor's MHz
+unit) and exists only for a controlled one-axis experiment; 0 keeps the SoC
+default and is the shipped value. The client never raises it unasked.
+
 ## Native Cedar hardware decode (pin-only rung)
 
 The port installs a fifth decoder rung, `native-cedar`, and config.env selects

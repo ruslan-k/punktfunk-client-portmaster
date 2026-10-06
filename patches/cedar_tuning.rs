@@ -9,6 +9,8 @@ pub(crate) struct CedarTuning {
     pub poll_budget_us:i32,
     pub append_aud:i32,
     pub low_delay:i32,
+    /// Vendor `VeSetSpeed` request in MHz. 0 keeps the SoC default (576 on TSPS).
+    pub ve_freq_mhz:i32,
 }
 impl CedarTuning {
     pub fn from_lookup(mut get:impl FnMut(&str)->Option<String>) -> Result<Self,&'static str> {
@@ -33,6 +35,7 @@ impl CedarTuning {
                 Some(v) if v=="auto"=>-1,
                 v=>number(v,0,0,1)?,
             },
+            ve_freq_mhz:number(get("PUNKTFUNK_CEDAR_VE_FREQ"),0,0,1152)?,
         })
     }
 }
