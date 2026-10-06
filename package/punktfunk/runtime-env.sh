@@ -102,8 +102,9 @@ if ! (
   done
 fi
 
-# First-run budget: 720p30. The UI can still select 60 FPS; never rewrite
-# existing user settings or paired-host identities.
+# First-run stream budget: 720p60 on the verified hardware decode path, 720p30
+# when the decoder falls back to software. Never rewrite existing user settings
+# or paired-host identities.
 python3 "$GAMEDIR/stream-defaults.py" \
   "${PUNKTFUNK_CONFIG_DIR:-$HOME/.config/punktfunk}/client-gtk-settings.json" || exit 1
 # Decode backend: the native Cedar hardware rung by default. It falls back

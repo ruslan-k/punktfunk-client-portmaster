@@ -19,16 +19,40 @@ forcing a governor was not justified. The pinned openh264-sys2 0.9.8 already
 builds ARM64 NEON; its decoder thread option carries a segfault warning and is
 not enabled speculatively.
 
-## Conservative control
+## First-run defaults follow the decode path
 
-New installations begin at 1280x720, H.264, 30 FPS, 4 Mbps with automatic rate.
-This preserves native resolution and doubles the frame budget. It is an explicit
-throughput mitigation, **not an optimized or verified 720p60 path**. Existing
-settings and host presets are untouched; the UI may select 60 FPS again.
+New installations request 1280x720, H.264, 4 Mbps with automatic rate. The
+refresh follows the configured decoder: 60 FPS on `native-cedar` (verified
+below), 30 FPS on the software rung, which cannot hold that cadence. Existing
+settings and host presets are untouched, and the UI can still select either.
 
-## Acceptance
+The 30 FPS figure began as a mitigation for the software-decoder backlog; it is
+kept only for that rung, because the measurement that justified it (queued
+decode-inclusive delay under moving content) applies to software decode.
 
-Use the same moving scene as baseline, verify negotiated 720p30, presented FPS,
+## 720p60 on the verified hardware path
+
+Quiet 120-second run through the shipped runtime defaults, native Cedar, no
+diagnostic overrides (build 9badbe4 plus the 60 FPS client setting):
+
+- Negotiated `1280x720@60`; received/decoded/presented medians **60.0 FPS**.
+- Sample-weighted mean decode **5.402 ms**; capture-to-presentation **13.149 ms**;
+  display 2.597 ms.
+- 5580 AUs and 5580 output pictures; 5580 exact original-PTS matches, 0
+  unmatched, 0 outstanding, 0 decode errors, lag census all zero.
+- Lost 0; skipped peaked at 3 in one window; `session_exit=0`.
+- Real DRM frame showed `native-cedar` at `1280x720@60`, no artefacts.
+
+Boundary: after roughly 85 s the activity on the host increased and the received
+rate settled at about 39-40 FPS. Client evidence rules out the handheld as the
+cause: decode 4.53 ms, display 2.65 ms, queue 0, lost 0, skipped 0, and host
+encode 2.8-3.05 ms per frame. The host produced fewer frames per second at the
+same per-frame size, so that tail is a host render/capture rate, not a decode or
+presentation limit. Report the received rate separately from the negotiated
+refresh; a 60 Hz request does not guarantee 60 produced frames.
+
+
+Use the same moving scene as baseline, verify the negotiated refresh, presented FPS,
 backlog flush/keyframe counts, ALSA playback-ready and hardware running state,
 then verify audible sound and clean return to Spruce. Unit tests and successful
 CI do not prove the physical acceptance criteria. Record device results below
@@ -54,7 +78,7 @@ zero-copy follow-up (`VideoPicture.nBufFd` → presenter dmabuf import) is
 deliberately out of scope for this first stream; timing, frame order and
 colour are proven on the copy path first.
 
-Acceptance for the rung, beyond the CI build: menu-launched 720p30 stream with
+Acceptance for the rung, beyond the CI build: menu-launched 720p stream with
 `cedar: first hardware frame delivered`, non-zero `frames` cadence, colours
 matching the software run on the same scene, and a clean demotion if the
 vendor stack is absent (`native Cedar init failed — demoting to the standard
