@@ -1147,6 +1147,7 @@ impl NativeCedarDecoder {
         -> Result<DrainStep> {
         match rc {
             VDECODE_RESULT_FRAME_DECODED | VDECODE_RESULT_KEYFRAME_DECODED => {
+                let arm_begin = self.profile.as_ref().map(|_| Instant::now());
                 if let Some(frame) = self.take_picture()? {
                     *produced += 1;
                     ensure!(!self.output_fifo || self.pending.len() < 32,
@@ -1157,16 +1158,26 @@ impl NativeCedarDecoder {
                         }
                     }
                 }
+                if let Some(profile) = self.profile.as_mut() {
+                    // The whole frame arm, so it contains stages 3..5 and the
+                    // subtraction is what names the arm's own work.
+                    profile.note_stage(8, elapsed_us(arm_begin));
+                }
                 // A frame does not end the drain: the vendor may have another
                 // picture ready, and the loop's round cap bounds the burst.
                 Ok(DrainStep::Again)
             }
             VDECODE_RESULT_OK => Ok(DrainStep::Again),
             VDECODE_RESULT_CONTINUE | VDECODE_RESULT_NO_BITSTREAM => {
+                let arm_begin = self.profile.as_ref().map(|_| Instant::now());
                 // The SBM parser runs on its own thread. An immediate empty
                 // result does not mean the submitted complete AU is unavailable
                 // until the next network frame; allow an opt-in bounded retry.
-                if async_parser::retry_async(rc, *produced, elapsed_us(self.async_start), self.poll_budget_us) {
+                let retry = async_parser::retry_async(rc, *produced, elapsed_us(self.async_start), self.poll_budget_us);
+                if let Some(profile) = self.profile.as_mut() {
+                    profile.note_stage(9, elapsed_us(arm_begin));
+                }
+                if retry {
                     std::thread::sleep(std::time::Duration::from_micros(200));
                     return Ok(DrainStep::Again);
                 }

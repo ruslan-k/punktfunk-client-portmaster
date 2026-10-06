@@ -14,13 +14,15 @@ pub(crate) fn queue_picture<T>(pending: &mut VecDeque<T>, newest: &mut Option<T>
 
 /// Stage indices: 0 planner, 1 feed AU, 2 whole `decode` entry (contains 0 and
 /// 1), 3 `RequestPicture`, 4 picture copy, 5 `ReturnPicture`, 6 the drain loop's
-/// own body (FIFO, ledger, bookkeeping) and 7 the whole `drain` call. 2 and 7
-/// overlap their sub-stages, so the columns must be subtracted, never summed.
+/// own body (FIFO, ledger, bookkeeping), 7 the whole `drain` call, 8 the frame
+/// arm (contains 3..5) and 9 the non-frame arms (the retry decision). 2, 6, 7
+/// and 8 overlap their sub-stages, so the columns must be subtracted, never
+/// summed.
 #[derive(Default, Debug)]
 pub(crate) struct PhaseStats {
-    pub stage_n: [u64; 8],
-    pub stage_us: [u64; 8],
-    pub stage_max_us: [u64; 8],
+    pub stage_n: [u64; 10],
+    pub stage_us: [u64; 10],
+    pub stage_max_us: [u64; 10],
     pub vendor_n: [u64; 8],
     pub vendor_us: [u64; 8],
     pub vendor_max_us: [u64; 8],
