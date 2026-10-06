@@ -211,6 +211,13 @@ Four measurements decide that the first row is a hardware floor:
    traffic per frame) left it at 2718 us against 2770 us.
 4. It is not a blocking syscall: `strace -f -T -e trace=ioctl` over 40 s and
    485719 ioctls recorded **no ioctl over 0.5 ms** — there is no wait to shorten.
+5. The memory controller is already at its fastest operating point:
+   `3120000.dmcfreq` reads 1200000000 with governor `performance` out of
+   150/480/800/1200 MHz, so there is no memory OPP left to raise either.
+
+Every lever that could move that number has now been measured and closed, so the
+hardware wait is the device's throughput at 1280x720 and nothing in the client
+can shorten it.
 
 So the reachable floor is `vendor 2.822 + NO_BITSTREAM 0.042 ~= 2.86 ms`, and it
 assumes our own per-frame overhead drops to zero. The removable client-side work
