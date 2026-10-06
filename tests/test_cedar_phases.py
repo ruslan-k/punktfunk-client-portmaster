@@ -13,7 +13,13 @@ class CedarPhaseTests(unittest.TestCase):
         # Phase counters preserve drain semantics; separate PTS patch names each AU.
         self.assertIn('self.pts_clock.next(capture_ns)', src)
         self.assertIn('VDECODE_RESULT_CONTINUE | VDECODE_RESULT_NO_BITSTREAM => {', src)
-        self.assertIn('async_parser::retry_async(rc, produced, elapsed_us(async_start), self.poll_budget_us)', src)
+        self.assertIn('async_parser::retry_async(rc, *produced, elapsed_us(self.async_start), self.poll_budget_us)', src)
+        # The drain body is a separate method returning its control decision, so
+        # `continue`/`break` cannot skip its own timer.
+        self.assertIn('fn drain_body(', src)
+        self.assertIn('DrainStep::Again', src)
+        self.assertIn('profile.note_stage(6, elapsed_us(body_begin))', src)
+        self.assertIn('profile.note_stage(7, elapsed_us(drain_begin))', src)
 
     def test_fifo_default_has_explicit_baseline_control_and_is_bounded(self):
         src = (ROOT / 'patches/video_cedar.rs').read_text()

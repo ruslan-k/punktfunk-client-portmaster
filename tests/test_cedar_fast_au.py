@@ -68,6 +68,23 @@ class CedarFastAu(unittest.TestCase):
         # The oracle's answer is what ships in verification mode.
         self.assertTrue(verify.rstrip().endswith('planned\n    }') or 'planned' in verify.split('fn ')[0])
 
+    def test_derive_attributes_stay_with_their_types(self):
+        # Inserting a type above `struct CedarFacts` once orphaned its
+        # `#[derive(Debug, Clone, Copy)]`, which then applied to the new type and
+        # broke the build with conflicting-impl errors. The pair must stay
+        # adjacent, and no type may carry two derives.
+        module = (ROOT / 'patches/video_cedar.rs').read_text()
+        self.assertIn('#[derive(Debug, Clone, Copy)]\nstruct CedarFacts {', module)
+        self.assertEqual(module.count('#[derive(Clone, Copy, Debug, PartialEq, Eq)]\nstruct PlanTruth {'), 1)
+        lines = module.splitlines()
+        for i, line in enumerate(lines):
+            if line.startswith('#[derive(') and i + 1 < len(lines):
+                nxt = lines[i + 1]
+                self.assertTrue(
+                    nxt.startswith('struct ') or nxt.startswith('enum ') or nxt.startswith('pub struct')
+                    or nxt.startswith('#[') or nxt.startswith('///'),
+                    f'derive at line {i + 1} is not attached to a type: {nxt!r}')
+
     def test_helper_ships_through_the_patch_pipeline_and_is_tested(self):
         self.assertTrue((ROOT / 'patches/cedar_fast_au.rs').is_file())
         phases = (ROOT / 'scripts/patch-cedar-phases.py').read_text()

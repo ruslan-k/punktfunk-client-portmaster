@@ -442,9 +442,14 @@ impl CedarLibs {
     }
 }
 
-/// Planner facts for one AU, mirroring the software rung's fold so colour and
-/// recovery behave identically across the two decoders.
-#[derive(Debug, Clone, Copy)]
+/// How one vendor result moves the drain loop.
+enum DrainStep {
+    /// Ask the decoder again (bounded by the loop's round cap).
+    Again,
+    /// Nothing more is available for this AU.
+    Done,
+}
+
 /// What a full plan said about the facts the cheap scanner claims to know.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct PlanTruth {
@@ -453,6 +458,9 @@ struct PlanTruth {
     frame_num: u16,
 }
 
+/// Planner facts for one AU, mirroring the software rung's fold so colour and
+/// recovery behave identically across the two decoders.
+#[derive(Debug, Clone, Copy)]
 struct CedarFacts {
     is_idr: bool,
     /// `None` = AU did not plan; the last colour stays.
@@ -527,6 +535,8 @@ pub(crate) struct NativeCedarDecoder {
     fast_mismatches: u64,
     /// What the last full plan said, for the verification comparison.
     last_plan_truth: Option<PlanTruth>,
+    /// Start of the current drain's retry budget; `None` when polling is off.
+    async_start: Option<Instant>,
     output_lag_frames: [u64; 5],
     pts_probe: bool,
     pts_ledger: PtsLedger<SubmittedPicture>,
@@ -621,6 +631,7 @@ impl NativeCedarDecoder {
             fast_matches: 0,
             fast_mismatches: 0,
             last_plan_truth: None,
+            async_start: None,
             output_lag_frames: [0; 5],
             pts_probe: std::env::var("PUNKTFUNK_CEDAR_PTS_PROBE").as_deref() == Ok("1"),
             pts_ledger: PtsLedger::default(),
@@ -1097,9 +1108,10 @@ impl NativeCedarDecoder {
     /// Run the vendor decoder until it has nothing more to do. Preserve every
     /// picture in the bounded output FIFO; newest-wins is diagnostic control only.
     fn drain(&mut self) -> Result<Option<CedarOutput>> {
+        let drain_begin = self.profile.as_ref().map(|_| Instant::now());
         let mut newest: Option<CedarOutput> = None;
         let mut produced = 0usize;
-        let async_start = (self.poll_budget_us > 0).then(Instant::now);
+        self.async_start = (self.poll_budget_us > 0).then(Instant::now);
         for _ in 0..DRAIN_ROUNDS {
             let begin = self.profile.as_ref().map(|_| Instant::now());
             // SAFETY: `handle` is live; the flags are the live-stream contract
@@ -1109,48 +1121,70 @@ impl NativeCedarDecoder {
             if let Some(profile) = self.profile.as_mut() {
                 profile.note_vendor(rc, elapsed_us(begin));
             }
-            match rc {
-                VDECODE_RESULT_FRAME_DECODED | VDECODE_RESULT_KEYFRAME_DECODED => {
-                    if let Some(frame) = self.take_picture()? {
-                        produced += 1;
-                        ensure!(!self.output_fifo || self.pending.len() < 32,
-                            "cedar: output FIFO exceeded 32 pictures; refuse unbounded backlog");
-                        if queue_picture(&mut self.pending, &mut newest, frame, self.output_fifo) {
-                            if let Some(profile) = self.profile.as_mut() {
-                                profile.replaced_pictures += 1;
-                            }
-                        }
-                    }
-                }
-                VDECODE_RESULT_OK => {}
-                VDECODE_RESULT_CONTINUE | VDECODE_RESULT_NO_BITSTREAM => {
-                    // The SBM parser runs on its own thread. An immediate empty
-                    // result does not mean the submitted complete AU is unavailable
-                    // until the next network frame; allow an opt-in bounded retry.
-                    if async_parser::retry_async(rc, produced, elapsed_us(async_start), self.poll_budget_us) {
-                        std::thread::sleep(std::time::Duration::from_micros(200));
-                        continue;
-                    }
-                    break;
-                },
-                VDECODE_RESULT_NO_FRAME_BUFFER => {
-                    // Output buffers are all held — every picture this rung
-                    // takes is returned right after its copy, so this is the
-                    // vendor's own pipeline depth, not ours to release.
-                    tracing::debug!(target: "cedar",
-                        "cedar: decoder reported NO_FRAME_BUFFER (pipeline depth)");
-                    break;
-                }
-                VDECODE_RESULT_RESOLUTION_CHANGE => {
-                    bail!("cedar: mid-stream resolution change (reopen unsupported in this build)");
-                }
-                other => bail!("cedar: DecodeVideoStream rc={other}"),
+            // The arm's own work is timed separately: `continue` and `break`
+            // leave the loop, so a timer placed after the match would never see
+            // them.
+            let body_begin = self.profile.as_ref().map(|_| Instant::now());
+            let outcome = self.drain_body(rc, &mut produced, &mut newest);
+            if let Some(profile) = self.profile.as_mut() {
+                profile.note_stage(6, elapsed_us(body_begin));
+            }
+            match outcome? {
+                DrainStep::Again => continue,
+                DrainStep::Done => break,
             }
         }
         if let Some(profile) = self.profile.as_mut() {
             profile.note_drain(produced);
+            profile.note_stage(7, elapsed_us(drain_begin));
         }
         Ok(newest)
+    }
+
+    /// One vendor result's follow-up work, with the loop's control decision as
+    /// its value so every path is timed by the caller.
+    fn drain_body(&mut self, rc: i32, produced: &mut usize, newest: &mut Option<CedarOutput>)
+        -> Result<DrainStep> {
+        match rc {
+            VDECODE_RESULT_FRAME_DECODED | VDECODE_RESULT_KEYFRAME_DECODED => {
+                if let Some(frame) = self.take_picture()? {
+                    *produced += 1;
+                    ensure!(!self.output_fifo || self.pending.len() < 32,
+                        "cedar: output FIFO exceeded 32 pictures; refuse unbounded backlog");
+                    if queue_picture(&mut self.pending, newest, frame, self.output_fifo) {
+                        if let Some(profile) = self.profile.as_mut() {
+                            profile.replaced_pictures += 1;
+                        }
+                    }
+                }
+                // A frame does not end the drain: the vendor may have another
+                // picture ready, and the loop's round cap bounds the burst.
+                Ok(DrainStep::Again)
+            }
+            VDECODE_RESULT_OK => Ok(DrainStep::Again),
+            VDECODE_RESULT_CONTINUE | VDECODE_RESULT_NO_BITSTREAM => {
+                // The SBM parser runs on its own thread. An immediate empty
+                // result does not mean the submitted complete AU is unavailable
+                // until the next network frame; allow an opt-in bounded retry.
+                if async_parser::retry_async(rc, *produced, elapsed_us(self.async_start), self.poll_budget_us) {
+                    std::thread::sleep(std::time::Duration::from_micros(200));
+                    return Ok(DrainStep::Again);
+                }
+                Ok(DrainStep::Done)
+            }
+            VDECODE_RESULT_NO_FRAME_BUFFER => {
+                // Output buffers are all held — every picture this rung
+                // takes is returned right after its copy, so this is the
+                // vendor's own pipeline depth, not ours to release.
+                tracing::debug!(target: "cedar",
+                    "cedar: decoder reported NO_FRAME_BUFFER (pipeline depth)");
+                Ok(DrainStep::Done)
+            }
+            VDECODE_RESULT_RESOLUTION_CHANGE => {
+                bail!("cedar: mid-stream resolution change (reopen unsupported in this build)");
+            }
+            other => bail!("cedar: DecodeVideoStream rc={other}"),
+        }
     }
 
     fn take_picture(&mut self) -> Result<Option<CedarOutput>> {
