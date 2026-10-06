@@ -58,6 +58,36 @@ class CedarZeroCopy(unittest.TestCase):
             self.skipTest('pinned upstream checkout not present')
         self.assertIn(anchor, target.read_text())
 
+    def test_the_patcher_inserts_once_and_refuses_drift(self):
+        import subprocess
+        import sys
+        import tempfile
+        script = ROOT / 'scripts/patch-presenter-planar.py'
+        anchor = "#[cfg(test)]\nmod tests {\n    use super::*;\n"
+        with tempfile.TemporaryDirectory() as temp:
+            src = pathlib.Path(temp) / 'crates/pf-presenter/src'
+            src.mkdir(parents=True)
+            target = src / 'dmabuf.rs'
+            target.write_text('prefix\n' + anchor)
+            first = subprocess.run([sys.executable, str(script), temp], capture_output=True, text=True)
+            self.assertEqual(first.returncode, 0, first.stderr)
+            text = target.read_text()
+            self.assertIn('fn import_planar(', text)
+            self.assertIn('pub struct HwFramePlanar {', text)
+            # Re-running must be a no-op, not a second copy.
+            second = subprocess.run([sys.executable, str(script), temp], capture_output=True, text=True)
+            self.assertEqual(second.returncode, 0, second.stderr)
+            self.assertEqual(target.read_text().count('fn import_planar('), 1)
+
+        with tempfile.TemporaryDirectory() as temp:
+            src = pathlib.Path(temp) / 'crates/pf-presenter/src'
+            src.mkdir(parents=True)
+            (src / 'dmabuf.rs').write_text('a tree whose anchor drifted\n')
+            drifted = subprocess.run([sys.executable, str(script), temp], capture_output=True, text=True)
+            self.assertEqual(drifted.returncode, 1)
+            self.assertIn('drifted', drifted.stdout)
+            self.assertEqual((src / 'dmabuf.rs').read_text(), 'a tree whose anchor drifted\n')
+
     def test_the_build_applies_the_presenter_patch(self):
         build = (ROOT / 'scripts/build.sh').read_text()
         self.assertIn('patch-presenter-planar.py', build)

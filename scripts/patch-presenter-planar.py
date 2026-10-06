@@ -16,7 +16,11 @@ import pathlib
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-TARGET = ROOT / 'build/punktfunk/crates/pf-presenter/src/dmabuf.rs'
+
+# The pinned Punktfunk checkout is the first argument, as in the other patchers;
+# its sources are not under the port root.
+def target_for(root: pathlib.Path) -> pathlib.Path:
+    return root / 'crates/pf-presenter/src/dmabuf.rs'
 
 ANCHOR = '''#[cfg(test)]
 mod tests {
@@ -196,17 +200,21 @@ fn import_planar(
 
 
 def main() -> int:
-    if not TARGET.is_file():
-        print(f'presenter planar: {TARGET} not found; run after the sources are pinned')
+    if len(sys.argv) != 2:
+        print('usage: patch-presenter-planar.py <punktfunk-checkout>')
+        return 2
+    target = target_for(pathlib.Path(sys.argv[1]))
+    if not target.is_file():
+        print(f'presenter planar: {target} not found; run after the sources are pinned')
         return 1
-    text = TARGET.read_text()
+    text = target.read_text()
     if 'fn import_planar(' in text:
         print('presenter planar: already applied')
         return 0
     if ANCHOR not in text:
         print('presenter planar: tests anchor drifted; no writes')
         return 1
-    TARGET.write_text(text.replace(ANCHOR, NEW_CODE + ANCHOR))
+    target.write_text(text.replace(ANCHOR, NEW_CODE + ANCHOR))
     print('presenter planar: added HwFramePlanar and import_planar')
     return 0
 
