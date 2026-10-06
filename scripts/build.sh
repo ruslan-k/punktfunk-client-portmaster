@@ -12,8 +12,11 @@ TARGET_DIR=$BUILD/target
 STAGE=$BUILD/stage
 DIST=$ROOT/dist
 
-rm -rf "$BUILD" "$DIST" "$PREFIX"
+# Keep Cargo's registry and incremental target cache across CI retries.
+# Source, staging and SDL prefix are always rebuilt from the pinned inputs.
+rm -rf "$SRC" "$STAGE" "$BUILD/sdl-build" "$DIST" "$PREFIX"
 mkdir -p "$SRC" "$PREFIX" "$TARGET_DIR" "$STAGE" "$DIST"
+export CARGO_HOME="$BUILD/cargo-cache"
 
 echo "==> source: Punktfunk $PUNKTFUNK_REF"
 git clone --filter=blob:none "$PUNKTFUNK_REPO" "$SRC/punktfunk"

@@ -24,7 +24,7 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 180
 
     steps:
       - name: Checkout port repository
@@ -34,6 +34,19 @@ jobs:
 
       - name: Test menu launchers
         run: python3 -m unittest discover -s tests -v
+
+      - name: Restore Cargo build cache
+        id: cargo-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            .build/cargo-cache/registry
+            .build/cargo-cache/git
+            .build/target
+          key: cargo-bullseye-ui-v1-${{ hashFiles('sources.env', 'build/Dockerfile', 'scripts/build.sh', 'patches/**') }}-${{ github.sha }}
+          restore-keys: |
+            cargo-bullseye-ui-v1-${{ hashFiles('sources.env', 'build/Dockerfile', 'scripts/build.sh', 'patches/**') }}-
+            cargo-bullseye-ui-v1-
 
       - name: Build cross-compilation container
         run: |
@@ -49,6 +62,16 @@ jobs:
             -v "$GITHUB_WORKSPACE:/work" \
             punktfunk-portmaster-builder \
             bash ./scripts/build.sh
+
+      - name: Save Cargo build cache even on compilation failure
+        if: always() && steps.cargo-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            .build/cargo-cache/registry
+            .build/cargo-cache/git
+            .build/target
+          key: ${{ steps.cargo-cache.outputs.cache-primary-key }}
 
       - name: Show package metadata
         run: |
