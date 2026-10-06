@@ -102,6 +102,10 @@ if ! (
   done
 fi
 
+# First-run software budget: 720p30. The UI can still select 60 FPS;
+# never rewrite existing user settings or paired-host identities.
+python3 "$GAMEDIR/stream-defaults.py" \
+  "${PUNKTFUNK_CONFIG_DIR:-$HOME/.config/punktfunk}/client-gtk-settings.json" || exit 1
 export PUNKTFUNK_DECODER=${PUNKTFUNK_DECODER:-software}
 export RUST_LOG=${RUST_LOG:-info}
 
