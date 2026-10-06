@@ -234,6 +234,33 @@ is 0.899 + 0.357 + 0.352 = 1.61 ms, which lands the realistic result at
 Sub-3 ms at 1280x720 on this VE would need the hardware wait itself to fall,
 and no lever for that was found.
 
+
+### Both "below 3 ms" suggestions, measured and rejected
+
+The two levers that could shrink the hardware wait without touching the client
+were tested on the device.
+
+**Turning deblocking off is not available.** x264's `--no-deblock` only zeroes the
+filter strengths; `disable_deblocking_filter_idc = 1`, which is what makes a
+decoder skip the in-loop filter, is not something the encoder signals. And the
+compute angle is already weak evidence: a 3.3x bitrate cut moved the wait by 5%.
+
+**Lowering the resolution to 1152x648 works on the vendor side but loses overall.**
+
+| | 1280x720 | 1152x648 |
+| --- | --- | --- |
+| vendor `FRAME_DECODED` | 2836 us | **2100 us** |
+| picture copy | 876 us | **1523 us** |
+| planner | 338 us | 340 us |
+| HUD decode | 4.576 ms | 4.432 ms |
+| capture-to-presentation | **12.36 ms** | **21.72 ms** |
+
+The vendor prediction was right - 736 us off the wait - but the vendor pads the
+stride at this width, so the packed copy path stops applying and the row loop
+costs 647 us more, which eats the whole gain. Worse, the presenter now has to
+scale instead of blit and end-to-end latency nearly doubles. A lower resolution is
+therefore not a cheaper decode here, it is a slower stream.
+
 ## Native Cedar hardware decode (pin-only rung)
 
 The port installs a fifth decoder rung, `native-cedar`, and config.env selects
