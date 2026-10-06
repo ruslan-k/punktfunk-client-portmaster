@@ -152,6 +152,16 @@ struct VideoConfig {
     b_is_soft_decoder_flag: c_int,
     b_vir_malloc_sbm: c_int,
     b_support_palloc_buf_before_decode: c_int,
+    // The A523 device's VideoConfig carries three more fields between the
+    // palloc flag and the holding counts — absent from the H6-CedarC
+    // transcription this rung started from. Verified from the shipped
+    // vdecoderDemo binary: its holding-count stores land at 0x68..0x74,
+    // memops at 0x80, nVeFreq at 0xA4, sizeof(VConfig)=216. Names unknown;
+    // values stay zeroed, and these placeholders keep every field below
+    // (and every field we write) at the offset the device reads.
+    reserved_after_palloc_0: c_int,
+    reserved_after_palloc_1: c_int,
+    reserved_after_palloc_2: c_int,
     n_de_interlace_holding_frame_buffer_num: c_int,
     n_display_holding_frame_buffer_num: c_int,
     n_rotate_holding_frame_buffer_num: c_int,
@@ -168,6 +178,10 @@ struct VideoConfig {
     b_set_proc_info_enable: c_int,
     n_set_proc_info_freq: c_int,
     n_channel_num: c_int,
+    /// Opaque tail: the device's VConfig is 216 bytes; the fields past
+    /// `n_channel_num` are not transcribed (never touched here). This pad
+    /// makes `size_of` match the device so the tests can pin it.
+    _tail: [u8; 32],
 }
 
 /// Zeroed tail for the device's `memcpy(p->vconfig, pVconfig, sizeof(VConfig))`:
@@ -645,6 +659,7 @@ impl NativeCedarDecoder {
         let mut storage: VConfigBuf = unsafe { std::mem::zeroed() };
         storage.config.e_output_pixel_format = PIXEL_FORMAT_YUV_PLANER_420;
         storage.config.n_frame_buffer_num = 8;
+        storage.config.n_de_interlace_holding_frame_buffer_num = 2;
         storage.config.n_display_holding_frame_buffer_num = 2;
         storage.config.n_decode_smooth_frame_buffer_num = 2;
         // The stream buffer is served uncached (the vendor skips cache
@@ -986,11 +1001,14 @@ mod tests {
         assert_eq!(DECODER_PIN, "native-cedar");
     }
 
-    /// The ABI transcriptions against the public H6-CedarC headers on aarch64
-    /// LP64. A layout drift here is a wrong picture on the device, so it must
+    /// The ABI transcriptions against the real device libvdecoder: the
+    /// VideoConfig anchors are extracted from the shipped vdecoderDemo
+    /// binary (holding counts at 0x68..0x74, memops at 0x80, nVeFreq at
+    /// 0xA4, sizeof 216); the rest from the public headers on aarch64 LP64.
+    /// A layout drift here is a wrong picture on the device, so it must
     /// fail at test time, not at the first stream.
     #[test]
-    fn abi_layouts_match_the_public_headers() {
+    fn abi_layouts_match_the_device_abi() {
         use std::mem::offset_of;
         use std::mem::size_of;
 
@@ -998,11 +1016,32 @@ mod tests {
         assert_eq!(offset_of!(VideoStreamInfo, p_codec_specific_data), 32);
         assert_eq!(offset_of!(VideoStreamInfo, b_is_frame_package), 48);
 
-        assert_eq!(size_of::<VideoConfig>(), 168);
+        assert_eq!(size_of::<VideoConfig>(), 216);
         assert_eq!(offset_of!(VideoConfig, e_output_pixel_format), 36);
         assert_eq!(offset_of!(VideoConfig, n_frame_buffer_num), 64);
         assert_eq!(offset_of!(VideoConfig, b_vir_malloc_sbm), 84);
-        assert_eq!(offset_of!(VideoConfig, memops), 112);
+        assert_eq!(
+            offset_of!(VideoConfig, b_support_palloc_buf_before_decode),
+            88
+        );
+        assert_eq!(
+            offset_of!(VideoConfig, n_de_interlace_holding_frame_buffer_num),
+            104
+        );
+        assert_eq!(
+            offset_of!(VideoConfig, n_display_holding_frame_buffer_num),
+            108
+        );
+        assert_eq!(
+            offset_of!(VideoConfig, n_rotate_holding_frame_buffer_num),
+            112
+        );
+        assert_eq!(
+            offset_of!(VideoConfig, n_decode_smooth_frame_buffer_num),
+            116
+        );
+        assert_eq!(offset_of!(VideoConfig, memops), 128);
+        assert_eq!(offset_of!(VideoConfig, n_ve_freq), 164);
 
         assert_eq!(size_of::<VideoStreamDataInfo>(), 64);
         assert_eq!(offset_of!(VideoStreamDataInfo, n_pts), 16);

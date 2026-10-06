@@ -59,3 +59,16 @@ Acceptance for the rung, beyond the CI build: menu-launched 720p30 stream with
 matching the software run on the same scene, and a clean demotion if the
 vendor stack is absent (`native Cedar init failed — demoting to the standard
 ladder`).
+
+### Device ABI (A523)
+
+The device's `VConfig` is **216 bytes** and carries three more fields between
+`bSupportPallocBufBeforeDecode` and the holding counts than the H6-CedarC
+transcription the rung started from. The real offsets were pinned by
+disassembling the device's own `/usr/bin/vdecoderDemo` (its store offsets
+and memset size): holding counts at `0x68..0x74`, `memops` at `0x80`,
+`nVeFreq` at `0xA4`. With the H6 layout, every rung write past offset `0x58`
+landed 12 bytes early — the lib read the holding counts as zero and
+`DecodeVideoStream` answered `NO_FRAME_BUFFER` forever (zero pictures, SBM
+filled, then the healthy software demotion). The module's unit tests assert
+this layout, so a drift fails at test time, not at the first stream.
