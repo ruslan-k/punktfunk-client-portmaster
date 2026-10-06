@@ -14,6 +14,12 @@ class CedarPhaseTests(unittest.TestCase):
         self.assertIn('data.n_pts = -1;', src)
         self.assertIn('VDECODE_RESULT_CONTINUE | VDECODE_RESULT_NO_BITSTREAM => break,', src)
 
+    def test_fifo_candidate_is_opt_in_and_bounded(self):
+        src = (ROOT / 'patches/video_cedar.rs').read_text()
+        self.assertIn('PUNKTFUNK_CEDAR_FIFO', src)
+        self.assertIn('queue_picture(', src)
+        self.assertIn('pending.len() < 32', src)
+
     def test_session_patcher_rejects_each_drift_before_copying_helper(self):
         import importlib.util
         import tempfile

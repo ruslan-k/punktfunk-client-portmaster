@@ -35,7 +35,7 @@ use std::time::Instant;
 
 #[path = "cedar_phases.rs"]
 mod phases;
-use phases::{PhaseStats, elapsed_us};
+use phases::{PhaseStats, elapsed_us, queue_picture};
 
 use anyhow::anyhow;
 use anyhow::bail;
@@ -465,6 +465,7 @@ pub(crate) struct NativeCedarDecoder {
     errors: u64,
     logged_at: u64,
     profile: Option<PhaseStats>,
+    output_fifo: bool,
     start: Instant,
 }
 
@@ -527,6 +528,7 @@ impl NativeCedarDecoder {
             logged_at: 0,
             profile: (std::env::var("PUNKTFUNK_CEDAR_PROFILE").as_deref() == Ok("1"))
                 .then(PhaseStats::default),
+            output_fifo: std::env::var("PUNKTFUNK_CEDAR_FIFO").as_deref() == Ok("1"),
             start: Instant::now(),
         })
     }
@@ -598,6 +600,10 @@ impl NativeCedarDecoder {
         }
         if let Some(frame) = self.drain(&facts)? {
             self.pending.push_back(frame);
+        }
+        if self.profile.is_some() && self.aus.is_multiple_of(120) {
+            tracing::info!(target: "cedar", au = self.aus, fifo = self.output_fifo,
+                pending = self.pending.len(), "cedar-output-queue");
         }
         let out = self.pending.pop_front();
         if out.is_some() {
@@ -810,12 +816,13 @@ impl NativeCedarDecoder {
                 VDECODE_RESULT_FRAME_DECODED | VDECODE_RESULT_KEYFRAME_DECODED => {
                     if let Some(frame) = self.take_picture(facts)? {
                         produced += 1;
-                        if newest.is_some() {
+                        ensure!(!self.output_fifo || self.pending.len() < 32,
+                            "cedar: output FIFO exceeded 32 pictures; refuse unbounded backlog");
+                        if queue_picture(&mut self.pending, &mut newest, frame, self.output_fifo) {
                             if let Some(profile) = self.profile.as_mut() {
                                 profile.replaced_pictures += 1;
                             }
                         }
-                        newest = Some(frame);
                     }
                 }
                 VDECODE_RESULT_OK => {}

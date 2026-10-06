@@ -1,5 +1,12 @@
 //! Opt-in, bounded Cedar phase counters; no per-frame logging or payloads.
 use std::time::Instant;
+use std::collections::VecDeque;
+
+/// Keep all decoded pictures in FIFO mode; retain the exact original policy for A/B.
+pub(crate) fn queue_picture<T>(pending: &mut VecDeque<T>, newest: &mut Option<T>,
+    frame: T, fifo: bool) -> bool {
+    if fifo { pending.push_back(frame); false } else { newest.replace(frame).is_some() }
+}
 
 #[derive(Default, Debug)]
 pub(crate) struct PhaseStats {
@@ -54,6 +61,28 @@ impl PhaseStats {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn fifo_burst_preserves_all_pictures_and_their_order() {
+        let mut queue = VecDeque::new();
+        let mut newest = None;
+        for frame in [10, 11, 12] {
+            assert!(!queue_picture(&mut queue, &mut newest, frame, true));
+        }
+        assert!(newest.is_none());
+        assert_eq!(queue.pop_front(), Some(10));
+        assert_eq!(queue.pop_front(), Some(11));
+        assert_eq!(queue.pop_front(), Some(12));
+        assert!(queue.is_empty());
+    }
+    #[test]
+    fn baseline_newest_wins_is_retained_for_control_runs() {
+        let mut queue = VecDeque::new();
+        let mut newest = None;
+        assert!(!queue_picture(&mut queue, &mut newest, 10, false));
+        assert!(queue_picture(&mut queue, &mut newest, 11, false));
+        assert_eq!(newest, Some(11));
+        assert!(queue.is_empty());
+    }
     #[test]
     fn counts_and_durations_are_kept_per_return_code() {
         let mut p = PhaseStats::default();
