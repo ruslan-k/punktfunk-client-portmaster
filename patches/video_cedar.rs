@@ -38,7 +38,8 @@ mod phases;
 use phases::{PhaseStats, elapsed_us, queue_picture};
 #[path = "cedar_pts.rs"]
 mod pts;
-use pts::PtsLedger;
+use pts::{PtsLedger, TokenClock};
+pub(crate) use pts::FrameStamp;
 
 use anyhow::anyhow;
 use anyhow::bail;
@@ -438,6 +439,18 @@ struct CedarFacts {
     recovery: punktfunk_core::reanchor::LocalRecovery,
 }
 
+#[derive(Clone, Copy)]
+struct SubmittedPicture {
+    source_au: u64,
+    stamp: Option<FrameStamp>,
+    facts: CedarFacts,
+    color: ColorDesc,
+}
+struct CedarOutput {
+    frame: CpuPlanarFrame,
+    stamp: Option<FrameStamp>,
+}
+
 pub(crate) struct NativeCedarDecoder {
     libs: CedarLibs,
     /// `VideoDecoder*` from `CreateVideoDecoder`; NULL only before check.
@@ -456,7 +469,7 @@ pub(crate) struct NativeCedarDecoder {
     /// Frames decoded ahead of the one-in/one-out ask (an SBM-full drain can
     /// out-produce a single AU). Returned front-first so display order equals
     /// decode order; bounded by construction to a couple of frames.
-    pending: VecDeque<CpuPlanarFrame>,
+    pending: VecDeque<CedarOutput>,
     plan_warned: bool,
     offsets_logged: bool,
     format_logged: bool,
@@ -469,7 +482,11 @@ pub(crate) struct NativeCedarDecoder {
     logged_at: u64,
     profile: Option<PhaseStats>,
     output_fifo: bool,
-    pts_probe: Option<PtsLedger<u64>>,
+    pts_probe: bool,
+    pts_ledger: PtsLedger<SubmittedPicture>,
+    pts_clock: TokenClock,
+    input_stamp: Option<FrameStamp>,
+    output_stamp: Option<FrameStamp>,
     pts_matches: u64,
     pts_unmatched: u64,
     start: Instant,
@@ -537,8 +554,11 @@ impl NativeCedarDecoder {
             // Device A/B proved newest-wins discarded half the pictures.
             // Default FIFO; explicit 0 retains the old control for diagnostics.
             output_fifo: std::env::var("PUNKTFUNK_CEDAR_FIFO").as_deref() != Ok("0"),
-            pts_probe: (std::env::var("PUNKTFUNK_CEDAR_PTS_PROBE").as_deref() == Ok("1"))
-                .then(PtsLedger::default),
+            pts_probe: std::env::var("PUNKTFUNK_CEDAR_PTS_PROBE").as_deref() == Ok("1"),
+            pts_ledger: PtsLedger::default(),
+            pts_clock: TokenClock::default(),
+            input_stamp: None,
+            output_stamp: None,
             pts_matches: 0,
             pts_unmatched: 0,
             start: Instant::now(),
@@ -552,7 +572,15 @@ impl NativeCedarDecoder {
         false
     }
 
+    pub(crate) fn set_input_stamp(&mut self, stamp: FrameStamp) {
+        self.input_stamp = Some(stamp);
+    }
+    pub(crate) fn take_output_stamp(&mut self) -> Option<FrameStamp> {
+        self.output_stamp.take()
+    }
+
     pub(crate) fn decode(&mut self, au: &[u8]) -> Result<Option<CpuPlanarFrame>> {
+        self.output_stamp = None;
         let begin = self.profile.as_ref().map(|_| Instant::now());
         let result = self.decode_inner(au);
         if let Some(profile) = self.profile.as_mut() {
@@ -610,7 +638,7 @@ impl NativeCedarDecoder {
         if facts.is_idr {
             self.anchored = true;
         }
-        if let Some(frame) = self.drain(&facts)? {
+        if let Some(frame) = self.drain()? {
             self.pending.push_back(frame);
         }
         if self.profile.is_some() && self.aus.is_multiple_of(120) {
@@ -624,7 +652,10 @@ impl NativeCedarDecoder {
             self.empties += 1;
         }
         self.maybe_log();
-        Ok(out)
+        Ok(out.map(|output| {
+            self.output_stamp = output.stamp;
+            output.frame
+        }))
     }
 
     /// IDR, colour, recovery for this AU from the shared planner — the same
@@ -729,7 +760,7 @@ impl NativeCedarDecoder {
     /// complete frame package. The returned frame, if any, is one the SBM-full
     /// retry had to retire before this AU could be submitted — the caller
     /// queues it ahead of this AU's own drain.
-    fn feed_au(&mut self, au: &[u8], facts: &CedarFacts) -> Result<Option<CpuPlanarFrame>> {
+    fn feed_au(&mut self, au: &[u8], facts: &CedarFacts) -> Result<Option<CedarOutput>> {
         ensure!(
             au.len() <= MAX_AU_BYTES,
             "cedar: {} byte AU exceeds the SBM's addressable length",
@@ -753,11 +784,11 @@ impl NativeCedarDecoder {
                 STREAM_INDEX,
             )
         };
-        let mut retired: Option<CpuPlanarFrame> = None;
+        let mut retired: Option<CedarOutput> = None;
         if rc < 0 {
             // The SBM is full: retire submitted data with one drain, hold any
             // frame it produced for the caller, and retry once.
-            retired = self.drain(facts)?;
+            retired = self.drain()?;
             rc = unsafe {
                 (self.libs.request_stream_buffer)(
                     self.handle,
@@ -800,28 +831,34 @@ impl NativeCedarDecoder {
         let mut data = unsafe { std::mem::zeroed::<VideoStreamDataInfo>() };
         data.p_data = buf;
         data.n_length = len;
-        data.n_pts = -1;
-        if self.pts_probe.is_some() { data.n_pts = self.aus as i64 * 1000; }
+        let stamp = self.input_stamp.take();
+        let capture_ns = stamp.map_or(self.now_us().max(1) as u64 * 1000, |s| s.pts_ns);
+        data.n_pts = if self.pts_probe { self.aus as i64 * 1000 } else {
+            self.pts_clock.next(capture_ns).ok_or_else(|| anyhow!("cedar: PTS token exhausted"))?
+        };
+        self.pts_ledger.insert(data.n_pts, SubmittedPicture {
+            source_au: self.aus, stamp, facts: *facts, color: self.color,
+        }).map_err(|e| anyhow!(e))?;
         data.b_is_first_part = 1;
         data.b_is_last_part = 1;
         data.b_valid = 1;
         // SAFETY: `handle` is live and `data` is a live local for the call.
         let rc = unsafe { (self.libs.submit_stream_data)(self.handle, &mut data, STREAM_INDEX) };
-        ensure!(rc >= 0, "cedar: SubmitVideoStreamData rc={rc}");
-        if let Some(probe) = self.pts_probe.as_mut() {
-            probe.insert(data.n_pts, self.aus).map_err(|e| anyhow!(e))?;
-            if self.aus <= 16 || self.aus.is_multiple_of(120) {
-                tracing::info!(target: "cedar", au = self.aus, pts = data.n_pts,
-                    outstanding = probe.len(), "cedar-pts-submit");
-            }
+        if rc < 0 {
+            self.pts_ledger.take(data.n_pts);
+            bail!("cedar: SubmitVideoStreamData rc={rc}");
+        }
+        if (self.pts_probe || self.profile.is_some()) && (self.aus <= 16 || self.aus.is_multiple_of(120)) {
+            tracing::info!(target: "cedar", au = self.aus, pts = data.n_pts,
+                capture_ns, outstanding = self.pts_ledger.len(), "cedar-pts-submit");
         }
         Ok(retired)
     }
 
     /// Run the vendor decoder until it has nothing more to do. Preserve every
     /// picture in the bounded output FIFO; newest-wins is diagnostic control only.
-    fn drain(&mut self, facts: &CedarFacts) -> Result<Option<CpuPlanarFrame>> {
-        let mut newest: Option<CpuPlanarFrame> = None;
+    fn drain(&mut self) -> Result<Option<CedarOutput>> {
+        let mut newest: Option<CedarOutput> = None;
         let mut produced = 0usize;
         for _ in 0..DRAIN_ROUNDS {
             let begin = self.profile.as_ref().map(|_| Instant::now());
@@ -834,7 +871,7 @@ impl NativeCedarDecoder {
             }
             match rc {
                 VDECODE_RESULT_FRAME_DECODED | VDECODE_RESULT_KEYFRAME_DECODED => {
-                    if let Some(frame) = self.take_picture(facts)? {
+                    if let Some(frame) = self.take_picture()? {
                         produced += 1;
                         ensure!(!self.output_fifo || self.pending.len() < 32,
                             "cedar: output FIFO exceeded 32 pictures; refuse unbounded backlog");
@@ -867,7 +904,7 @@ impl NativeCedarDecoder {
         Ok(newest)
     }
 
-    fn take_picture(&mut self, facts: &CedarFacts) -> Result<Option<CpuPlanarFrame>> {
+    fn take_picture(&mut self) -> Result<Option<CedarOutput>> {
         let begin = self.profile.as_ref().map(|_| Instant::now());
         // SAFETY: `handle` is live; NULL means no display picture is pending.
         let pic = unsafe { (self.libs.request_picture)(self.handle, STREAM_INDEX) };
@@ -879,7 +916,7 @@ impl NativeCedarDecoder {
             return Ok(None);
         }
         let begin = self.profile.as_ref().map(|_| Instant::now());
-        let copied = self.copy_picture(pic, facts);
+        let copied = self.copy_picture(pic);
         if let Some(profile) = self.profile.as_mut() {
             profile.note_copy(elapsed_us(begin));
         }
@@ -898,20 +935,22 @@ impl NativeCedarDecoder {
         copied.map(Some)
     }
 
-    fn copy_picture(&mut self, pic: *const VideoPicture, facts: &CedarFacts) -> Result<CpuPlanarFrame> {
+    fn copy_picture(&mut self, pic: *const VideoPicture) -> Result<CedarOutput> {
         // SAFETY: `pic` is the live picture the vendor just handed over; every
         // read below is a scalar or a plane range the header documents, and
         // the pointer stays valid until ReturnPicture (already en route).
         let p = unsafe { &*pic };
-        if let Some(probe) = self.pts_probe.as_mut() {
-            let source_au = probe.take(p.n_pts);
-            if source_au.is_some() { self.pts_matches += 1; } else { self.pts_unmatched += 1; }
-            if self.aus <= 16 || self.aus.is_multiple_of(120) || source_au.is_none() {
-                tracing::info!(target: "cedar", input_au = self.aus, source_au = ?source_au,
-                    pts = p.n_pts, matches = self.pts_matches, unmatched = self.pts_unmatched,
-                    outstanding = probe.len(), "cedar-pts-output");
-            }
+        let source = self.pts_ledger.take(p.n_pts);
+        if source.is_some() { self.pts_matches += 1; } else { self.pts_unmatched += 1; }
+        if ((self.pts_probe || self.profile.is_some()) && (self.aus <= 16 || self.aus.is_multiple_of(120)))
+            || source.is_none() {
+            tracing::info!(target: "cedar", input_au = self.aus,
+                source_au = ?source.map(|s| s.source_au), pts = p.n_pts,
+                matches = self.pts_matches, unmatched = self.pts_unmatched,
+                outstanding = self.pts_ledger.len(), "cedar-pts-output");
         }
+        let source = source.ok_or_else(|| anyhow!(
+            "cedar: unmatched output PTS; refusing FIFO-order guess (pts={})", p.n_pts))?;
         if self.profile.is_some() && (self.aus <= 8 || self.aus.is_multiple_of(120)) {
             tracing::info!(target: "cedar", au = self.aus, slot = p.n_id, pts = p.n_pts,
                 progressive = p.b_is_progressive, top_field_first = p.b_top_field_first,
@@ -968,9 +1007,13 @@ impl NativeCedarDecoder {
                 "cedar: first picture decoded (vendor format copied to packed I420)");
         }
         let mut frame =
-            CpuPlanarFrame::from_planes(width, height, [y, u, v], self.color, facts.is_idr, DECODER_PIN)?;
-        frame.recovery = facts.recovery;
-        Ok(frame)
+            CpuPlanarFrame::from_planes(width, height, [y, u, v], source.color, source.facts.is_idr, DECODER_PIN)?;
+        frame.recovery = source.facts.recovery;
+        let stamp = source.stamp.map(|mut s| {
+            s.ready_ns = punktfunk_core::quic::wall_clock_ns();
+            s
+        });
+        Ok(CedarOutput { frame, stamp })
     }
 
     fn maybe_log(&mut self) {
@@ -1008,7 +1051,7 @@ impl Drop for NativeCedarDecoder {
         tracing::info!(target: "cedar",
             aus = self.aus, frames = self.frames_out, empties = self.empties, errors = self.errors,
             pts_matches = self.pts_matches, pts_unmatched = self.pts_unmatched,
-            pts_outstanding = self.pts_probe.as_ref().map_or(0, PtsLedger::len),
+            pts_outstanding = self.pts_ledger.len(),
             "cedar: decoder closed");
     }
 }

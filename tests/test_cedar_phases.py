@@ -10,8 +10,8 @@ class CedarPhaseTests(unittest.TestCase):
         self.assertIn('profile.note_vendor(rc,', src)
         self.assertIn('profile.note_copy(', src)
         self.assertIn('cedar-phase-json', src)
-        # Instrumentation must not alter feeding or the drain policy.
-        self.assertIn('data.n_pts = -1;', src)
+        # Phase counters preserve drain semantics; separate PTS patch names each AU.
+        self.assertIn('self.pts_clock.next(capture_ns)', src)
         self.assertIn('VDECODE_RESULT_CONTINUE | VDECODE_RESULT_NO_BITSTREAM => break,', src)
 
     def test_fifo_default_has_explicit_baseline_control_and_is_bounded(self):
