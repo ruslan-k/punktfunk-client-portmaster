@@ -188,6 +188,37 @@ separate piece of work: the measured decode is 4.55 ms with the copy included.
 | vendor `NV12` output | closed: the request is ignored |
 | three-plane dma-buf import | open, de-risked: layout proven byte-for-byte, presenter is the work |
 
+
+### The 720p60 floor, and why sub-3 ms is not reachable here
+
+Correct accounting of the decode stage (the profile's stage 2 wraps the planner
+and the feed as well, so they must be subtracted before reading the drain):
+
+| part | 720p60 | 360p60 |
+| --- | --- | --- |
+| vendor `FRAME_DECODED` | 2822 us | 815 us |
+| picture copy | 899 us | 230 us |
+| planner | 357 us | 316 us |
+| vendor `NO_BITSTREAM` x2 | 42 us | — |
+| drain-loop tail (FIFO/PTS/bookkeeping) | ~352 us | — |
+| **HUD decode** | **4.61 ms** | **1.81 ms** |
+
+Four measurements decide that the first row is a hardware floor:
+
+1. It scales with pixel count: 4x fewer pixels gave 3.4x less time.
+2. It ignores the VE clock: 576 -> 1152 MHz changed nothing.
+3. It ignores memory contention: adding a full extra frame copy (2.76 MB of
+   traffic per frame) left it at 2718 us against 2770 us.
+4. It is not a blocking syscall: `strace -f -T -e trace=ioctl` over 40 s and
+   485719 ioctls recorded **no ioctl over 0.5 ms** — there is no wait to shorten.
+
+So the reachable floor is `vendor 2.822 + NO_BITSTREAM 0.042 ~= 2.86 ms`, and it
+assumes our own per-frame overhead drops to zero. The removable client-side work
+is 0.899 + 0.357 + 0.352 = 1.61 ms, which lands the realistic result at
+**~3.1-3.4 ms**, not below 3: a zero-copy presenter alone gives about 3.6-3.7 ms.
+Sub-3 ms at 1280x720 on this VE would need the hardware wait itself to fall,
+and no lever for that was found.
+
 ## Native Cedar hardware decode (pin-only rung)
 
 The port installs a fifth decoder rung, `native-cedar`, and config.env selects
