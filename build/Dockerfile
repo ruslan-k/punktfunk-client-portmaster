@@ -21,6 +21,7 @@ RUN printf '%s\n' \
       libxcursor-dev:arm64 libxfixes-dev:arm64 libxrender-dev:arm64 \
       libxkbcommon-dev:arm64 libwayland-dev:arm64 \
       libdrm-dev:arm64 libgbm-dev:arm64 \
+      libfreetype6-dev:arm64 libfontconfig1-dev:arm64 \
     && rm -rf /var/lib/apt/lists/*
 
 ARG RUST_TOOLCHAIN=1.96.0
