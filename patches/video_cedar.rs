@@ -801,7 +801,7 @@ impl NativeCedarDecoder {
         // knob (frame-buffer count, SBM malloc mode, palloc-before-decode)
         // is unvalidated on this lib and the demo runs without them.
         if self.low_delay { storage.config.common_config_flags_192 = 1; }
-        storage.config.e_output_pixel_format = PIXEL_FORMAT_YUV_PLANER_420;
+        storage.config.e_output_pixel_format = tune.pixfmt;
         storage.config.n_de_interlace_holding_frame_buffer_num = 2;
         storage.config.b_no_b_frames = tune.no_b_frames;
         storage.config.n_display_holding_frame_buffer_num = tune.display;
@@ -814,7 +814,7 @@ impl NativeCedarDecoder {
             frame_package = tune.frame_package, smooth = tune.smooth, display = tune.display,
             drop_b_delay = tune.drop_b_delay, immediate_handoff = self.immediate_handoff,
             poll_us = tune.poll_budget_us, append_aud = self.append_aud,
-            ve_freq_mhz = tune.ve_freq_mhz,
+            ve_freq_mhz = tune.ve_freq_mhz, pixfmt = tune.pixfmt,
             "cedar: candidate configuration (one-axis A/B controls)");
 
         // SAFETY: `handle` is live; `info` and `storage` are live locals the

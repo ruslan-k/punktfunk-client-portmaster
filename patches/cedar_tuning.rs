@@ -11,6 +11,9 @@ pub(crate) struct CedarTuning {
     pub low_delay:i32,
     /// Vendor `VeSetSpeed` request in MHz. 0 keeps the SoC default (576 on TSPS).
     pub ve_freq_mhz:i32,
+    /// `VConfig.eOutputPixelFormat` request (1 = planar 420, 6 = NV12). The FBM
+    /// reports the format it actually delivers, so this is a request, not a promise.
+    pub pixfmt:i32,
 }
 impl CedarTuning {
     pub fn from_lookup(mut get:impl FnMut(&str)->Option<String>) -> Result<Self,&'static str> {
@@ -36,6 +39,7 @@ impl CedarTuning {
                 v=>number(v,0,0,1)?,
             },
             ve_freq_mhz:number(get("PUNKTFUNK_CEDAR_VE_FREQ"),0,0,1152)?,
+            pixfmt:number(get("PUNKTFUNK_CEDAR_PIXFMT"),1,1,6)?,
         })
     }
 }

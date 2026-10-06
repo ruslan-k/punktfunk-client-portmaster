@@ -136,6 +136,28 @@ the copy this rung just produced at the standard `YV12` offsets, and logs the
 result. It is read-only and never selects the frame path; the plan is to prove
 the layout on the device before any presenter import is written.
 
+
+### The probe result: the exported frames are exactly our copy
+
+CI build `3c1fc7d`, `PUNKTFUNK_CEDAR_DMABUF_PROBE=1`, 60-second run at 720p60 —
+all 14 picture descriptors reported:
+
+```
+fd=39..52 len=1384448 expected=Some(1382400) offsets=(0, 921600, 1152000)
+copied=1382400 matches=true first_difference=None
+```
+
+The descriptor is 1382400 bytes of the same bytes the CPU copy produced, plus a
+2 KiB tail, at tightly packed `YV12` offsets. The frame path and the numbers were
+unchanged by the probe (decode 4.56 ms, lag 0, 0 errors, 60 FPS).
+
+That settles layout, not the presenter. The current importer takes the
+two-plane `NV12`/`P010` model only, so a Cedar zero-copy frame needs either a
+three-plane planar import or an `NV12` output. `PUNKTFUNK_CEDAR_PIXFMT` requests
+`VConfig.eOutputPixelFormat` (1 = planar 420, 6 = `NV12`) as its own axis; the
+FBM reports the format it actually delivers (`e_pixel_format = 4` today even
+though 1 is requested), so the request has to be measured, not assumed.
+
 ## Native Cedar hardware decode (pin-only rung)
 
 The port installs a fifth decoder rung, `native-cedar`, and config.env selects
