@@ -6,7 +6,7 @@ STAGE=${1:-$ROOT/.build/stage}
 
 test -f "$STAGE/port.json"
 test -x "$STAGE/Punktfunk.sh"
-test -x "$STAGE/Punktfunk Setup.sh"
+test ! -e "$STAGE/Punktfunk Setup.sh"
 test -x "$STAGE/punktfunk/bin/punktfunk"
 test -x "$STAGE/punktfunk/bin/punktfunk-session"
 test -f "$STAGE/punktfunk/libs/libSDL3.so.0"
@@ -24,7 +24,7 @@ if grep -q -- '--browse needs the console UI' "$STAGE/.session-strings"; then
   exit 1
 fi
 rm "$STAGE/.session-strings"
-bash -n "$STAGE/Punktfunk.sh" "$STAGE/Punktfunk Setup.sh" \
+bash -n "$STAGE/Punktfunk.sh" \
   "$STAGE/punktfunk/launcher-common.sh" "$STAGE/punktfunk/runtime-env.sh"
 
 jq -e '.version == 3' "$STAGE/port.json" >/dev/null

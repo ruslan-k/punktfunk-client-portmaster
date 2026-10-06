@@ -179,7 +179,7 @@ SpruceOS commit:      $SPRUCEOS_NIGHTLY_COMMIT
 Port repository SHA:  ${GITHUB_SHA:-local}
 EOF
 
-chmod +x "$STAGE/Punktfunk.sh" "$STAGE/Punktfunk Setup.sh" \
+chmod +x "$STAGE/Punktfunk.sh" \
   "$STAGE/punktfunk/runtime-env.sh" \
   "$STAGE/punktfunk/bin/punktfunk" "$STAGE/punktfunk/bin/punktfunk-session"
 

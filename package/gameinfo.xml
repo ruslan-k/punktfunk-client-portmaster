@@ -8,12 +8,4 @@
     <developer>Punktfunk contributors</developer>
     <genre>Streaming</genre>
   </game>
-  <game>
-    <path>./Punktfunk Setup.sh</path>
-    <name>Punktfunk Setup</name>
-    <desc>Pair the handheld with a Punktfunk host and choose the default host.</desc>
-    <releasedate>20261006T000000</releasedate>
-    <developer>ruslan-k</developer>
-    <genre>Utility</genre>
-  </game>
 </gameList>

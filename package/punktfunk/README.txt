@@ -1,10 +1,13 @@
 Punktfunk for TrimUI Smart Pro S
 ================================
 
-1. Run "Punktfunk Setup" from Ports to open the graphical gamepad host console.
+1. Run "Punktfunk" from Ports to open the graphical gamepad host console.
 2. Select or enter your Punktfunk host.
 3. Enter the PIN shown by the host/web console using the on-screen controls.
-4. Launch "Punktfunk". With no default host it opens the same host console.
+4. Open the host library. A saved default host opens its library on launch.
+
+There is only one launcher. Remove the obsolete "Punktfunk Setup.sh" when
+updating an older installation.
 
 No terminal or dialog package is required. On Spruce without a desktop display,
 SDL3 selects KMSDRM and uses the firmware's VK_KHR_display Vulkan presentation.

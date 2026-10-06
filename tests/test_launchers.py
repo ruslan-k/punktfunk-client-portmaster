@@ -44,9 +44,14 @@ class Launchers(unittest.TestCase):
             self.assertIn("session_exit=23", log)
             return json.loads(args.read_text())
 
-    def test_setup_uses_graphical_host_console_without_dialog(self):
-        result = self.run_launcher("Punktfunk Setup.sh")
-        self.assertEqual(result["argv"], ["--browse", "--fullscreen"])
+    def test_package_has_only_one_menu_launcher(self):
+        import xml.etree.ElementTree as ET
+        package = ROOT / "package"
+        self.assertEqual(sorted(p.name for p in package.glob("*.sh")), ["Punktfunk.sh"])
+        metadata = json.loads((package / "port.json").read_text())
+        self.assertEqual(metadata["items"], ["Punktfunk.sh", "punktfunk"])
+        paths = [g.findtext("path") for g in ET.parse(package / "gameinfo.xml").getroot()]
+        self.assertEqual(paths, ["./Punktfunk.sh"])
 
     def test_main_without_host_opens_host_console(self):
         result = self.run_launcher("Punktfunk.sh")
@@ -60,13 +65,11 @@ class Launchers(unittest.TestCase):
         build = (ROOT / "scripts/build.sh").read_text()
         self.assertIn("--features punktfunk-client-session/ui", build)
 
-    def test_both_launchers_use_port_local_fontconfig(self):
-        for name in ["Punktfunk.sh", "Punktfunk Setup.sh"]:
-            with self.subTest(name=name):
-                self.assertTrue(self.run_launcher(name)["fontconfig_ok"])
+    def test_launcher_uses_port_local_fontconfig(self):
+        self.assertTrue(self.run_launcher("Punktfunk.sh")["fontconfig_ok"])
 
     def test_no_desktop_display_selects_kmsdrm(self):
-        self.assertEqual(self.run_launcher("Punktfunk Setup.sh")["video"], "kmsdrm")
+        self.assertEqual(self.run_launcher("Punktfunk.sh")["video"], "kmsdrm")
 
 
 if __name__ == "__main__":

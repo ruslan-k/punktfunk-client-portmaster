@@ -14,7 +14,7 @@ The current source lock targets SpruceOS nightly **v4.5.1-20261004.2** (developm
 - SDL3 built from source and bundled with the port
 - embedded **ALSA playback backend** replacing upstream desktop PipeWire
 - integration with SpruceOS `asound-setup.sh`, including its current speaker/Bluetooth route
-- PortMaster launcher plus a pairing/setup launcher
+- one PortMaster launcher with integrated host discovery, pairing and settings
 - persistent Punktfunk trust/settings store on the SD card
 - software H.264 decode as the conservative default; Vulkan is still used for presentation
 - build metadata, source revisions and SHA-256 checksums
@@ -41,7 +41,9 @@ The default decoder is software H.264 so the port does not assume Vulkan Video d
 
 Download `punktfunk.zip` from the **edge** prerelease (or a tagged release) and install/extract it as a PortMaster port.
 
-Run **Punktfunk Setup** once to pair the handheld with a Punktfunk host, then launch **Punktfunk**.
+Run **Punktfunk**. With no default host, it opens the controller-driven host menu with discovery, pairing and settings. With a default host, it opens its game library. There is no separate setup launcher.
+
+When updating an older installation manually, remove the obsolete `Punktfunk Setup.sh` from the Ports directory.
 
 Runtime logs are written under `ports/punktfunk/logs/`.
 
