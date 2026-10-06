@@ -528,7 +528,9 @@ impl NativeCedarDecoder {
             logged_at: 0,
             profile: (std::env::var("PUNKTFUNK_CEDAR_PROFILE").as_deref() == Ok("1"))
                 .then(PhaseStats::default),
-            output_fifo: std::env::var("PUNKTFUNK_CEDAR_FIFO").as_deref() == Ok("1"),
+            // Device A/B proved newest-wins discarded half the pictures.
+            // Default FIFO; explicit 0 retains the old control for diagnostics.
+            output_fifo: std::env::var("PUNKTFUNK_CEDAR_FIFO").as_deref() != Ok("0"),
             start: Instant::now(),
         })
     }
@@ -798,8 +800,8 @@ impl NativeCedarDecoder {
         Ok(retired)
     }
 
-    /// Run the vendor decoder until it has nothing more to do, newest frame
-    /// wins (the pump's queue rule).
+    /// Run the vendor decoder until it has nothing more to do. Preserve every
+    /// picture in the bounded output FIFO; newest-wins is diagnostic control only.
     fn drain(&mut self, facts: &CedarFacts) -> Result<Option<CpuPlanarFrame>> {
         let mut newest: Option<CpuPlanarFrame> = None;
         let mut produced = 0usize;

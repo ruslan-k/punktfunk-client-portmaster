@@ -14,9 +14,10 @@ class CedarPhaseTests(unittest.TestCase):
         self.assertIn('data.n_pts = -1;', src)
         self.assertIn('VDECODE_RESULT_CONTINUE | VDECODE_RESULT_NO_BITSTREAM => break,', src)
 
-    def test_fifo_candidate_is_opt_in_and_bounded(self):
+    def test_fifo_default_has_explicit_baseline_control_and_is_bounded(self):
         src = (ROOT / 'patches/video_cedar.rs').read_text()
         self.assertIn('PUNKTFUNK_CEDAR_FIFO', src)
+        self.assertIn('as_deref() != Ok("0")', src)
         self.assertIn('queue_picture(', src)
         self.assertIn('pending.len() < 32', src)
 
