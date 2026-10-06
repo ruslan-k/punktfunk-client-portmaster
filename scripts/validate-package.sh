@@ -10,6 +10,12 @@ test -x "$STAGE/Punktfunk Setup.sh"
 test -x "$STAGE/punktfunk/bin/punktfunk"
 test -x "$STAGE/punktfunk/bin/punktfunk-session"
 test -f "$STAGE/punktfunk/libs/libSDL3.so.0"
+# A successful build without KMSDRM still cannot open a Spruce menu session.
+strings "$STAGE/punktfunk/libs/libSDL3.so.0" > "$STAGE/.sdl-strings"
+grep -qx 'kmsdrm' "$STAGE/.sdl-strings"
+rm "$STAGE/.sdl-strings"
+bash -n "$STAGE/Punktfunk.sh" "$STAGE/Punktfunk Setup.sh" \
+  "$STAGE/punktfunk/launcher-common.sh" "$STAGE/punktfunk/runtime-env.sh"
 
 jq -e '.version == 3' "$STAGE/port.json" >/dev/null
 jq -e '.attr.arch | index("aarch64") != null' "$STAGE/port.json" >/dev/null

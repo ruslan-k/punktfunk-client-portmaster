@@ -38,6 +38,10 @@ export PUNKTFUNK_ALSA_DEVICE=${PUNKTFUNK_ALSA_DEVICE:-default}
 # SDL3's upstream spelling is SDL_VIDEO_DRIVER. Keep SDL_VIDEODRIVER too for
 # older firmware wrappers that still key off the SDL2-compatible variable.
 case "${PUNKTFUNK_VIDEO_DRIVER:-auto}" in
+  kmsdrm)
+    export SDL_VIDEO_DRIVER=kmsdrm
+    export SDL_VIDEODRIVER=kmsdrm
+    ;;
   x11)
     export SDL_VIDEO_DRIVER=x11
     export SDL_VIDEODRIVER=x11
@@ -53,6 +57,11 @@ case "${PUNKTFUNK_VIDEO_DRIVER:-auto}" in
     elif [ -n "${WAYLAND_DISPLAY:-}" ]; then
       export SDL_VIDEO_DRIVER=wayland
       export SDL_VIDEODRIVER=wayland
+    else
+      # Menu-launched Spruce has no compositor. Its Mali ICD exposes
+      # VK_KHR_display, not X11/Wayland WSI; use SDL's direct-display backend.
+      export SDL_VIDEO_DRIVER=kmsdrm
+      export SDL_VIDEODRIVER=kmsdrm
     fi
     ;;
 esac

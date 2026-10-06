@@ -32,6 +32,9 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Test menu launchers
+        run: python3 -m unittest discover -s tests -v
+
       - name: Build cross-compilation container
         run: |
           docker build \

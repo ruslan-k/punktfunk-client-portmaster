@@ -20,6 +20,7 @@ RUN printf '%s\n' \
       libx11-dev:arm64 libxext-dev:arm64 libxi-dev:arm64 libxrandr-dev:arm64 \
       libxcursor-dev:arm64 libxfixes-dev:arm64 libxrender-dev:arm64 \
       libxkbcommon-dev:arm64 libwayland-dev:arm64 \
+      libdrm-dev:arm64 libgbm-dev:arm64 \
     && rm -rf /var/lib/apt/lists/*
 
 ARG RUST_TOOLCHAIN=1.96.0
