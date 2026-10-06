@@ -20,8 +20,14 @@ export XDG_DATA_HOME="$STATE/data"
 
 # Firmware may ship no monospace fonts. Skia's console overlay requires one
 # even though the main UI embeds Geist. Use only the port's font closure.
-export FONTCONFIG_FILE="$GAMEDIR/fonts/fonts.conf"
+# Bullseye fontconfig ignores prefix="relative"; a '.' entry scans the cwd
+# (Spruce's SD root). Generate an absolute, narrowly scoped font directory.
+case "$GAMEDIR" in
+  *['&<>|\']*) echo 'Unsupported XML/fontconfig path' >&2; exit 1 ;;
+esac
+export FONTCONFIG_FILE="$RUNTIME/fonts.conf"
 export FONTCONFIG_PATH="$GAMEDIR/fonts"
+sed "s|@FONTDIR@|$GAMEDIR/fonts|g" "$GAMEDIR/fonts/fonts.conf" > "$FONTCONFIG_FILE" || exit 1
 
 if [ -z "${XDG_RUNTIME_DIR:-}" ]; then
   export XDG_RUNTIME_DIR="/tmp/punktfunk-${UID:-0}"
