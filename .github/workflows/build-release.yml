@@ -63,6 +63,14 @@ jobs:
             punktfunk-portmaster-builder \
             bash ./scripts/build.sh
 
+      - name: Make container-created Cargo cache readable
+        if: always()
+        run: |
+          if [ -d .build ]; then
+            sudo chown -R "$(id -u):$(id -g)" .build
+            chmod -R u+rwX .build
+          fi
+
       - name: Save Cargo build cache even on compilation failure
         if: always() && steps.cargo-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
