@@ -82,7 +82,9 @@ mod tests {
         let mut blob = vec![0xEEu8; packed_len(width, height).unwrap()];
         let luma: Vec<u8> = (0..y).map(|i| (i % 251) as u8).collect();
         let vp: Vec<u8> = (0..c).map(|i| (i % 241) as u8).collect();
-        let up: Vec<u8> = (0..c).map(|i| (i % 239) as u8).collect();
+        // +1 so the first chroma byte already differs from V: a swapped-plane
+        // detector must report the region start, not a later coincidence.
+        let up: Vec<u8> = (0..c).map(|i| (i % 239) as u8 + 1).collect();
         blob[y_off..y_off + y].copy_from_slice(&luma);
         blob[v_off..v_off + c].copy_from_slice(&vp);
         blob[u_off..u_off + c].copy_from_slice(&up);
@@ -104,7 +106,8 @@ mod tests {
         let (blob, (y, v, u)) = synthetic(1280, 720);
         let off = yv12_offsets(1280, 720).unwrap();
         assert!(!matches(&blob, off, &y, &u, &v), "swapped planes must not match");
-        assert_eq!(first_difference(&blob, off, &y, &u, &v), Some(921_600));
+        assert_eq!(first_difference(&blob, off, &y, &u, &v), Some(921_600),
+            "a swapped chroma order is reported at the chroma region start");
         let shifted = (2048, 2048 + 921_600, 2048 + 1_152_000);
         assert!(!matches(&blob, shifted, &y, &v, &u), "a leading pad must not match");
         assert_eq!(first_difference(&blob, shifted, &y, &v, &u), Some(2048),
