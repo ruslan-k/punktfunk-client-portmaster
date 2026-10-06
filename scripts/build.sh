@@ -94,6 +94,10 @@ PY
 echo "==> cross-build Punktfunk CLI + gamepad console session"
 export PATH="/root/.cargo/bin:$PATH"
 export CARGO_TARGET_DIR="$TARGET_DIR"
+# GitHub runner/container HTTP2 occasionally fails while fetching the sparse
+# crates.io index. Use HTTP/1.1 and bounded Cargo retries, retaining --locked.
+export CARGO_HTTP_MULTIPLEXING=false
+export CARGO_NET_RETRY=5
 export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
 export CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc
 export CXX_aarch64_unknown_linux_gnu=aarch64-linux-gnu-g++
