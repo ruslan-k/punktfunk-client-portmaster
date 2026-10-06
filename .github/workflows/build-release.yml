@@ -28,7 +28,7 @@ jobs:
 
     steps:
       - name: Checkout port repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
@@ -51,7 +51,7 @@ jobs:
         run: |
           cat dist/build-info.json
           cat dist/SHA256SUMS
-          unzip -l dist/punktfunk.zip | sed -n '1,120p'
+          unzip -l dist/punktfunk.zip | sed -n '1,140p'
 
       - name: Upload CI artifact
         uses: actions/upload-artifact@v4
@@ -78,7 +78,7 @@ jobs:
             dist/build-info.json \
             --prerelease \
             --title "Punktfunk PortMaster edge" \
-            --notes "Automated TrimUI Smart Pro S test build from $GITHUB_SHA. Experimental SDL3/Vulkan port."
+            --notes "Automated TrimUI Smart Pro S / SpruceOS nightly build from $GITHUB_SHA. Embedded ALSA playback; experimental SDL3/Vulkan presenter."
 
       - name: Publish tagged release
         if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')

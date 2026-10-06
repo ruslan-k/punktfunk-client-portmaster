@@ -58,32 +58,43 @@ cmake --install "$BUILD/sdl-build"
 
 test -f "$PREFIX/lib/libSDL3.so.0"
 
-echo "==> apply embedded compatibility patch"
-python3 - "$SRC/punktfunk" <<'PY'
+echo "==> install SpruceOS embedded audio backend"
+python3 - "$SRC/punktfunk" "$ROOT" <<'PY'
 from pathlib import Path
+import re
+import shutil
 import sys
 
 root = Path(sys.argv[1])
-changes = [
-    (
-        root / "crates/pf-client-core/Cargo.toml",
-        'pipewire = { version = "0.9", features = ["v0_3_49"], optional = true }',
-        'pipewire = { version = "0.9", optional = true }',
-    ),
-    (
-        root / "crates/pf-client-core/src/audio.rs",
-        'let requested = usize::try_from(buffer.requested()).unwrap_or(0);',
-        'let requested = 0usize;',
-    ),
-]
+port = Path(sys.argv[2])
+cargo = root / "crates/pf-client-core/Cargo.toml"
+text = cargo.read_text(encoding="utf-8")
 
-for path, old, new in changes:
-    text = path.read_text(encoding="utf-8")
-    count = text.count(old)
-    if count != 1:
-        raise SystemExit(f"{path}: expected exactly one compatibility target, found {count}")
-    path.write_text(text.replace(old, new), encoding="utf-8")
-    print(f"patched {path.relative_to(root)}")
+# The handheld backend is ALSA. Remove the Linux PipeWire crate from the
+# desktop feature so libspa bindgen never sees Bullseye's obsolete headers.
+text, n_feature = re.subn(r'"dep:pipewire",\s*', "", text, count=1)
+text, n_dep = re.subn(
+    r'\n# `v0_3_49` for `Buffer::requested`.*?\npipewire = \{[^\n]+\}\n',
+    "\n",
+    text,
+    count=1,
+    flags=re.S,
+)
+if n_feature != 1 or n_dep != 1:
+    raise SystemExit(
+        f"unexpected upstream Cargo.toml shape: feature={n_feature} dependency={n_dep}"
+    )
+cargo.write_text(text, encoding="utf-8")
+
+shutil.copyfile(
+    port / "patches/audio-alsa.rs",
+    root / "crates/pf-client-core/src/audio.rs",
+)
+shutil.copyfile(
+    port / "patches/pad_audio-embedded.rs",
+    root / "crates/pf-client-core/src/pad_audio.rs",
+)
+print("installed ALSA playback backend and embedded pad-audio stub")
 PY
 
 echo "==> cross-build Punktfunk CLI + minimal session"
@@ -102,6 +113,12 @@ export BINDGEN_EXTRA_CLANG_ARGS="--target=aarch64-unknown-linux-gnu -I/usr/inclu
 cd "$SRC/punktfunk"
 rustup override set "$RUST_TOOLCHAIN"
 rustup target add "$TARGET" --toolchain "$RUST_TOOLCHAIN"
+rustup component add rustfmt --toolchain "$RUST_TOOLCHAIN"
+
+# Make the copied backend pass upstream formatting before compiling it.
+rustfmt --edition 2024 \
+  crates/pf-client-core/src/audio.rs \
+  crates/pf-client-core/src/pad_audio.rs
 
 cargo build --locked --release --target "$TARGET" \
   -p punktfunk-cli \
@@ -116,7 +133,7 @@ cp "$TARGET_DIR/$TARGET/release/punktfunk" "$STAGE/punktfunk/bin/"
 cp "$TARGET_DIR/$TARGET/release/punktfunk-session" "$STAGE/punktfunk/bin/"
 cp -L "$PREFIX/lib/libSDL3.so.0" "$STAGE/punktfunk/libs/libSDL3.so.0"
 
-"$ROOT/scripts/collect-libs.sh" \
+bash "$ROOT/scripts/collect-libs.sh" \
   "$STAGE/punktfunk/libs" \
   "$STAGE/punktfunk/bin/punktfunk" \
   "$STAGE/punktfunk/bin/punktfunk-session" \
@@ -141,6 +158,9 @@ SDL commit:           $SDL_ACTUAL
 Rust toolchain:       $RUST_TOOLCHAIN
 Target:               $TARGET
 Build base:           $BUILD_BASE
+Audio backend:        ALSA (SpruceOS embedded patch)
+SpruceOS nightly:     $SPRUCEOS_NIGHTLY_TAG
+SpruceOS commit:      $SPRUCEOS_NIGHTLY_COMMIT
 Port repository SHA:  ${GITHUB_SHA:-local}
 EOF
 
@@ -169,6 +189,9 @@ out = {
     "rust_toolchain": "$RUST_TOOLCHAIN",
     "target": "$TARGET",
     "build_base": "$BUILD_BASE",
+    "audio_backend": "alsa-spruceos",
+    "spruceos_nightly_tag": "$SPRUCEOS_NIGHTLY_TAG",
+    "spruceos_nightly_commit": "$SPRUCEOS_NIGHTLY_COMMIT",
     "github_sha": os.environ.get("GITHUB_SHA", "local"),
 }
 with open(sys.argv[1], "w", encoding="utf-8") as f:

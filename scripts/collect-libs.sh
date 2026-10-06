@@ -22,6 +22,9 @@ skip_lib() {
   case "$1" in
     libc.so.*|libm.so.*|libdl.so.*|libpthread.so.*|librt.so.*|ld-linux-aarch64.so.*|libgcc_s.so.*)
       return 0 ;;
+    libasound.so.*)
+      # Use SpruceOS' own ALSA so its bluealsa and device plugins match the firmware.
+      return 0 ;;
     libEGL.so.*|libGL.so.*|libGLX.so.*|libGLES*.so.*|libgbm.so.*|libdrm*.so.*|libvulkan.so.*|libMali.so.*|libmali.so.*)
       return 0 ;;
   esac

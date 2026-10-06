@@ -27,6 +27,14 @@ fi
 export PATH="$GAMEDIR/bin:$PATH"
 export LD_LIBRARY_PATH="$RUNTIME:$GAMEDIR/libs:${LD_LIBRARY_PATH:-}"
 
+# SpruceOS owns audio routing (speaker vs Bluetooth). Its helper writes the
+# .asoundrc into the HOME we just selected, so Punktfunk's ALSA "default" PCM
+# follows the same route and volume plumbing as native emulators.
+if [ -x /mnt/SDCARD/spruce/scripts/asound-setup.sh ]; then
+  /mnt/SDCARD/spruce/scripts/asound-setup.sh "$HOME" >/dev/null 2>&1 || true
+fi
+export PUNKTFUNK_ALSA_DEVICE=${PUNKTFUNK_ALSA_DEVICE:-default}
+
 # SDL3's upstream spelling is SDL_VIDEO_DRIVER. Keep SDL_VIDEODRIVER too for
 # older firmware wrappers that still key off the SDL2-compatible variable.
 case "${PUNKTFUNK_VIDEO_DRIVER:-auto}" in
@@ -49,9 +57,10 @@ case "${PUNKTFUNK_VIDEO_DRIVER:-auto}" in
     ;;
 esac
 
-# TSPS images have shipped Mali Vulkan entry points without the conventional
-# libvulkan.so.1 loader name. Prefer a real Vulkan loader when present; otherwise
-# expose the Mali library under the name ash/SDL3 dlopen.
+# Some TrimUI images expose the vendor Mali Vulkan entry points without a
+# conventional loader soname. Prefer a real system loader. The libmali fallback
+# is retained for device testing; if the nightly already provides a loader this
+# block is a no-op.
 if ! (
   [ -e /usr/lib/libvulkan.so.1 ] ||
   [ -e /usr/lib64/libvulkan.so.1 ] ||
