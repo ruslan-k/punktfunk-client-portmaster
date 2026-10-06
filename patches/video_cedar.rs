@@ -1088,6 +1088,7 @@ impl NativeCedarDecoder {
                 "cedar: picture crop offsets in play");
         }
         let (cw, ch) = CpuPlanarFrame::chroma_dims(width, height);
+        let chroma_stride = stride / 2;
         let y_len = (width as usize)
             .checked_mul(height as usize)
             .ok_or_else(|| anyhow!("cedar: luma size overflow"))?;
