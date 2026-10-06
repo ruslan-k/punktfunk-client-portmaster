@@ -63,12 +63,15 @@ ladder`).
 ### Device ABI (A523)
 
 The device's `VConfig` is **216 bytes** and carries three more fields between
-`bSupportPallocBufBeforeDecode` and the holding counts than the H6-CedarC
-transcription the rung started from. The real offsets were pinned by
-disassembling the device's own `/usr/bin/vdecoderDemo` (its store offsets
-and memset size): holding counts at `0x68..0x74`, `memops` at `0x80`,
-`nVeFreq` at `0xA4`. With the H6 layout, every rung write past offset `0x58`
-landed 12 bytes early — the lib read the holding counts as zero and
-`DecodeVideoStream` answered `NO_FRAME_BUFFER` forever (zero pictures, SBM
-filled, then the healthy software demotion). The module's unit tests assert
-this layout, so a drift fails at test time, not at the first stream.
+`bGpuBufValid` and `nAlignStride` than the H6-CedarC transcription the rung
+started from. The layout was pinned by disassembling the device's own
+`/usr/bin/vdecoderDemo` (its store offsets and the memset size): holding
+counts at `0x68..0x74`, `memops` at `0x80`, `nVeFreq` at `0xA4`. The same
+demo's FBM create line prints `nAlignStride = 0`; with the H6 offsets the
+rung's palloc write landed on the device's `nAlignStride` (printed as `1`)
+and `DecodeVideoStream` answered `NO_FRAME_BUFFER` forever — zero pictures,
+SBM filled, then the healthy software demotion. The rung now drives exactly
+the demo-validated values (planar-420 output — the demo prints
+`eOutputPixelFormat = 1` — and holding 2/2/2; every other knob zeroed), and
+the module's unit tests pin the layout, so a drift fails at test time, not at
+the first stream.

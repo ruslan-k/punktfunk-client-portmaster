@@ -148,20 +148,21 @@ struct VideoConfig {
     n_frame_buffer_num: c_int,
     b_secureos_en: c_int,
     b_gpu_buf_valid: c_int,
+    // The A523 device's VideoConfig carries three more fields here, between
+    // bGpuBufValid and nAlignStride — absent from the H6-CedarC
+    // transcription this rung started from. Evidence: the device's own
+    // vdecoderDemo reads its holding counts at 0x68..0x74, memops at 0x80
+    // and nVeFreq at 0xA4 (sizeof 216); and with the H6 offsets our write
+    // that should have been palloc landed where the device reads
+    // nAlignStride (its FBM create line printed "nAlignStride = 1" while
+    // the working demo prints 0). Names unknown; values stay zeroed.
+    reserved_after_gpu_valid_0: c_int,
+    reserved_after_gpu_valid_1: c_int,
+    reserved_after_gpu_valid_2: c_int,
     n_align_stride: c_int,
     b_is_soft_decoder_flag: c_int,
     b_vir_malloc_sbm: c_int,
     b_support_palloc_buf_before_decode: c_int,
-    // The A523 device's VideoConfig carries three more fields between the
-    // palloc flag and the holding counts — absent from the H6-CedarC
-    // transcription this rung started from. Verified from the shipped
-    // vdecoderDemo binary: its holding-count stores land at 0x68..0x74,
-    // memops at 0x80, nVeFreq at 0xA4, sizeof(VConfig)=216. Names unknown;
-    // values stay zeroed, and these placeholders keep every field below
-    // (and every field we write) at the offset the device reads.
-    reserved_after_palloc_0: c_int,
-    reserved_after_palloc_1: c_int,
-    reserved_after_palloc_2: c_int,
     n_de_interlace_holding_frame_buffer_num: c_int,
     n_display_holding_frame_buffer_num: c_int,
     n_rotate_holding_frame_buffer_num: c_int,
@@ -637,8 +638,8 @@ impl NativeCedarDecoder {
     }
 
     /// `InitializeVideoDecoder` with the TSPS configuration: stream packages
-    /// (raw Annex-B, matching the vendor demo), 8 frame buffers,
-    /// smooth/display holding of 2, virtual SBM.
+    /// (raw Annex-B, matching the vendor demo), vendor-default frame-buffer
+    /// count, smooth/display holding of 2, no non-demo knobs.
     fn initialize(&mut self, width: u32, height: u32) -> Result<()> {
         // SAFETY: plain-data structs of integers and pointers; an all-zero
         // value is the vendor header's own "unset" state.
@@ -657,15 +658,15 @@ impl NativeCedarDecoder {
         // SAFETY: as above; the tail keeps the vendor's `sizeof(VConfig)`
         // memcpy inside this allocation.
         let mut storage: VConfigBuf = unsafe { std::mem::zeroed() };
+        // Keep this set equal to what the device's vdecoderDemo drives:
+        // planar-420 output (the demo prints eOutputPixelFormat = 1) and the
+        // three holding counts. Everything else stays zeroed -- every extra
+        // knob (frame-buffer count, SBM malloc mode, palloc-before-decode)
+        // is unvalidated on this lib and the demo runs without them.
         storage.config.e_output_pixel_format = PIXEL_FORMAT_YUV_PLANER_420;
-        storage.config.n_frame_buffer_num = 8;
         storage.config.n_de_interlace_holding_frame_buffer_num = 2;
         storage.config.n_display_holding_frame_buffer_num = 2;
         storage.config.n_decode_smooth_frame_buffer_num = 2;
-        // The stream buffer is served uncached (the vendor skips cache
-        // flushing for it), and FBM palloc shortens the first picture.
-        storage.config.b_vir_malloc_sbm = 1;
-        storage.config.b_support_palloc_buf_before_decode = 1;
 
         // SAFETY: `handle` is live; `info` and `storage` are live locals the
         // call only reads (and rewrites `storage.config.memops` through, as
@@ -678,7 +679,7 @@ impl NativeCedarDecoder {
         );
         self.inited = true;
         tracing::info!(target: "cedar", width, height,
-            "cedar: hardware decoder initialized (H.264, YUV_PLANER_420 out, 8 frame buffers)");
+            "cedar: hardware decoder initialized (H.264, YUV_PLANER_420 out, vendor-default buffers)");
         Ok(())
     }
 
@@ -1019,10 +1020,12 @@ mod tests {
         assert_eq!(size_of::<VideoConfig>(), 216);
         assert_eq!(offset_of!(VideoConfig, e_output_pixel_format), 36);
         assert_eq!(offset_of!(VideoConfig, n_frame_buffer_num), 64);
-        assert_eq!(offset_of!(VideoConfig, b_vir_malloc_sbm), 84);
+        assert_eq!(offset_of!(VideoConfig, n_align_stride), 88);
+        assert_eq!(offset_of!(VideoConfig, b_is_soft_decoder_flag), 92);
+        assert_eq!(offset_of!(VideoConfig, b_vir_malloc_sbm), 96);
         assert_eq!(
             offset_of!(VideoConfig, b_support_palloc_buf_before_decode),
-            88
+            100
         );
         assert_eq!(
             offset_of!(VideoConfig, n_de_interlace_holding_frame_buffer_num),
