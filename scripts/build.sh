@@ -70,19 +70,13 @@ port = Path(sys.argv[2])
 cargo = root / "crates/pf-client-core/Cargo.toml"
 text = cargo.read_text(encoding="utf-8")
 
-# The handheld backend is ALSA. Remove the Linux PipeWire crate from the
-# desktop feature so libspa bindgen never sees Bullseye's obsolete headers.
+# The handheld backend is ALSA. Keep the optional PipeWire dependency in the
+# manifest/lockfile for a byte-stable upstream Cargo.lock, but do not activate
+# it from the desktop feature. That prevents libspa bindgen from compiling.
 text, n_feature = re.subn(r'"dep:pipewire",\s*', "", text, count=1)
-text, n_dep = re.subn(
-    r'\n# `v0_3_49` for `Buffer::requested`.*?\npipewire = \{[^\n]+\}\n',
-    "\n",
-    text,
-    count=1,
-    flags=re.S,
-)
-if n_feature != 1 or n_dep != 1:
+if n_feature != 1:
     raise SystemExit(
-        f"unexpected upstream Cargo.toml shape: feature={n_feature} dependency={n_dep}"
+        f"unexpected upstream Cargo.toml shape: pipewire feature refs={n_feature}"
     )
 cargo.write_text(text, encoding="utf-8")
 

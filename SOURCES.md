@@ -17,7 +17,7 @@ The PortMaster build copies two maintained source files over the pinned upstream
 - `patches/audio-alsa.rs` replaces the Linux PipeWire client sink with an ALSA playback backend. It uses SpruceOS' generated `default` PCM, keeps Punktfunk's decoded PCM/jitter/AV-sync plumbing, and intentionally returns "unsupported" for microphone capture.
 - `patches/pad_audio-embedded.rs` disables the PipeWire-only DualSense speaker/haptics-audio renderer while leaving ordinary SDL controller input and rumble in place.
 
-The build also removes the optional Rust `pipewire` dependency from `pf-client-core`'s desktop feature. This avoids binding the build to desktop libspa headers and matches SpruceOS' ALSA audio stack.
+The build keeps upstream's optional Rust `pipewire` dependency in `Cargo.toml`/`Cargo.lock` for lockfile reproducibility, but removes `dep:pipewire` from the embedded `desktop` feature activation. PipeWire is therefore not compiled or linked, while the pinned upstream lockfile remains valid.
 
 These substitutions do **not** change the Punktfunk wire protocol, trust model, host orchestration, video decode or Vulkan presenter.
 
