@@ -21,6 +21,10 @@ LOGRUNG_ANCHOR = (
     '        ),\n'
 )
 PACKED_ANCHOR = '    /// Take three already tight planes. Refuses a plane whose length is not\n'
+ANCHOR_EVIDENCE = (
+    '            #[cfg(target_os = "linux")]\n'
+    '            DecodedImage::NativeDmabuf(f) => f.references_clean,\n'
+)
 GUARD_ANCHOR = (
     'pub(crate) enum FrameGuard {\n'
     '    Va(crate::video_vaapi_native::VaFrameGuard),\n'
@@ -41,6 +45,7 @@ def fixture_tree(root: pathlib.Path) -> None:
         + WHICH_ANCHOR + "mid4\n"
         + LOGRUNG_ANCHOR + "mid5\n"
         + PACKED_ANCHOR + "mid6\n"
+        + ANCHOR_EVIDENCE + "mid7\n"
         + GUARD_ANCHOR + "suffix\n"
     )
 
