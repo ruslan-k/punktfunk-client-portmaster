@@ -80,6 +80,17 @@ if n_feature != 1:
     )
 cargo.write_text(text, encoding="utf-8")
 
+# The console's presenter dependency otherwise re-enables PyroWave transitively,
+# despite the session's --no-default-features. Keep the H.264-only port feature
+# closure explicit instead of building an unrelated desktop codec toolchain.
+console_cargo = root / "crates/pf-console-ui/Cargo.toml"
+console_text = console_cargo.read_text(encoding="utf-8")
+old = 'pf-presenter = { path = "../pf-presenter", optional = true }'
+new = 'pf-presenter = { path = "../pf-presenter", optional = true, default-features = false }'
+if console_text.count(old) != 1:
+    raise SystemExit("unexpected console presenter dependency")
+console_cargo.write_text(console_text.replace(old, new), encoding="utf-8")
+
 shutil.copyfile(
     port / "patches/audio-alsa.rs",
     root / "crates/pf-client-core/src/audio.rs",
