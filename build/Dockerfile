@@ -22,6 +22,7 @@ RUN printf '%s\n' \
       libxkbcommon-dev:arm64 libwayland-dev:arm64 \
       libdrm-dev:arm64 libgbm-dev:arm64 \
       libfreetype6-dev:arm64 libfontconfig1-dev:arm64 \
+      fonts-dejavu-core \
     && rm -rf /var/lib/apt/lists/*
 
 ARG RUST_TOOLCHAIN=1.96.0

@@ -28,7 +28,7 @@ class Launchers(unittest.TestCase):
             cli = bins / "punktfunk"
             cli.write_text('#!/bin/bash\nif [ "$1" = default-host ]; then printf "%s\\n" "$TEST_HOST"; else exit 99; fi\n')
             session = bins / "punktfunk-session"
-            session.write_text('#!/usr/bin/env python3\nimport os,json,sys\nopen(os.environ["TEST_ARGS"],"w").write(json.dumps({"argv":sys.argv[1:],"video":os.environ.get("SDL_VIDEO_DRIVER")}))\nsys.exit(23)\n')
+            session.write_text('#!/usr/bin/env python3\nimport os,json,sys\nopen(os.environ["TEST_ARGS"],"w").write(json.dumps({"argv":sys.argv[1:],"video":os.environ.get("SDL_VIDEO_DRIVER"),"fontconfig_ok":os.path.isfile(os.environ.get("FONTCONFIG_FILE", ""))}))\nsys.exit(23)\n')
             cli.chmod(0o755)
             session.chmod(0o755)
             args = root / "args.json"
@@ -59,6 +59,11 @@ class Launchers(unittest.TestCase):
     def test_build_enables_session_console_ui(self):
         build = (ROOT / "scripts/build.sh").read_text()
         self.assertIn("--features punktfunk-client-session/ui", build)
+
+    def test_both_launchers_use_port_local_fontconfig(self):
+        for name in ["Punktfunk.sh", "Punktfunk Setup.sh"]:
+            with self.subTest(name=name):
+                self.assertTrue(self.run_launcher(name)["fontconfig_ok"])
 
     def test_no_desktop_display_selects_kmsdrm(self):
         self.assertEqual(self.run_launcher("Punktfunk Setup.sh")["video"], "kmsdrm")

@@ -18,6 +18,11 @@ export XDG_CONFIG_HOME="$STATE/config"
 export XDG_CACHE_HOME="$STATE/cache"
 export XDG_DATA_HOME="$STATE/data"
 
+# Firmware may ship no monospace fonts. Skia's console overlay requires one
+# even though the main UI embeds Geist. Use only the port's font closure.
+export FONTCONFIG_FILE="$GAMEDIR/fonts/fonts.conf"
+export FONTCONFIG_PATH="$GAMEDIR/fonts"
+
 if [ -z "${XDG_RUNTIME_DIR:-}" ]; then
   export XDG_RUNTIME_DIR="/tmp/punktfunk-${UID:-0}"
   mkdir -p "$XDG_RUNTIME_DIR"

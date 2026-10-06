@@ -139,7 +139,10 @@ cargo build --locked --release --target "$TARGET" \
   --features punktfunk-client-session/ui
 echo "==> stage PortMaster package"
 cp -a "$ROOT/package/." "$STAGE/"
-mkdir -p "$STAGE/punktfunk/bin" "$STAGE/punktfunk/libs" "$STAGE/punktfunk/licenses"
+mkdir -p "$STAGE/punktfunk/bin" "$STAGE/punktfunk/libs" "$STAGE/punktfunk/licenses" "$STAGE/punktfunk/fonts"
+cp /usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf "$STAGE/punktfunk/fonts/"
+cp /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf "$STAGE/punktfunk/fonts/"
+cp /usr/share/doc/fonts-dejavu-core/copyright "$STAGE/punktfunk/licenses/DejaVu-copyright.txt"
 
 cp "$TARGET_DIR/$TARGET/release/punktfunk" "$STAGE/punktfunk/bin/"
 cp "$TARGET_DIR/$TARGET/release/punktfunk-session" "$STAGE/punktfunk/bin/"
