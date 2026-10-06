@@ -130,6 +130,14 @@ class CedarPatchTests(unittest.TestCase):
         ]:
             self.assertIn(marker, module)
 
+    def test_module_feeds_stream_packages_like_the_vendor_demo(self):
+        # The A523 libvdecoder produced zero frames (SBM filled up) from a
+        # frame-package feed; the device's own vdecoderDemo leaves
+        # bIsFramePackage unset for raw Annex-B, so the rung must too.
+        module = (ROOT / "patches/video_cedar.rs").read_text()
+        self.assertIn("info.b_is_frame_package = 0;", module)
+        self.assertNotIn("info.b_is_frame_package = 1;", module)
+
 
 if __name__ == "__main__":
     unittest.main()

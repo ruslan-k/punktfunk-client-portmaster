@@ -622,8 +622,9 @@ impl NativeCedarDecoder {
         }
     }
 
-    /// `InitializeVideoDecoder` with the validated TSPS configuration: frame
-    /// packages, 8 frame buffers, smooth/display holding of 2, virtual SBM.
+    /// `InitializeVideoDecoder` with the TSPS configuration: stream packages
+    /// (raw Annex-B, matching the vendor demo), 8 frame buffers,
+    /// smooth/display holding of 2, virtual SBM.
     fn initialize(&mut self, width: u32, height: u32) -> Result<()> {
         // SAFETY: plain-data structs of integers and pointers; an all-zero
         // value is the vendor header's own "unset" state.
@@ -633,7 +634,11 @@ impl NativeCedarDecoder {
         info.n_height = height as c_int;
         info.n_frame_rate = 30;
         info.n_frame_duration = 33_333;
-        info.b_is_frame_package = 1;
+        // Stream packages, not frame packages: the A523 libvdecoder did not
+        // decode anything from a frame-package feed (631 AUs, 0 frames, SBM
+        // full), and every vendor consumer of raw Annex-B on this platform --
+        // vdecoderDemo included -- leaves this flag unset (0).
+        info.b_is_frame_package = 0;
 
         // SAFETY: as above; the tail keeps the vendor's `sizeof(VConfig)`
         // memcpy inside this allocation.
