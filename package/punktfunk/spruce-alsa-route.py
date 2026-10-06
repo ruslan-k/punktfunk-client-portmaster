@@ -33,7 +33,7 @@ def repair(path):
                 grp.getgrnam(name)
             except KeyError:
                 if not name.isdecimal():
-                    gid_fix = f'\ndefaults.pcm.ipc_gid {os.getgid()}\n'
+                    gid_fix = f'\ndefaults.pcm.!ipc_gid {os.getgid()}\n'
     # Keep the firmware's default (including Bluetooth), mixer and mic untouched.
     path.write_text(text + '\n# Punktfunk: firmware omitted the speaker Playback alias.\n'
                     'pcm.Playback {\n    type plug\n    slave.pcm "dmix"\n}\n' + gid_fix)

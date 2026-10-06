@@ -19,7 +19,9 @@ class AlsaRoute(unittest.TestCase):
             config.write_text('defaults.pcm.ipc_gid "punktfunk_nonexistent_group"\npcm.dmix { type null }\n<' + str(rc) + '>\n')
             subprocess.run(['python3', str(HELPER), str(rc)],
                            env=dict(os.environ, HOME=tmp, ALSA_CONFIG_PATH=str(config)), check=True)
-            self.assertIn('defaults.pcm.ipc_gid ' + str(os.getgid()), rc.read_text())
+            probe = 'import ctypes as c; a=c.CDLL("libasound.so.2"); assert a.snd_config_update()>=0'
+            subprocess.run(['python3', '-c', probe], env=dict(os.environ, HOME=tmp, ALSA_CONFIG_PATH=str(config)), check=True)
+            self.assertIn('defaults.pcm.!ipc_gid ' + str(os.getgid()), rc.read_text())
 
     def test_missing_playback_is_repaired_without_changing_bluetooth_default(self):
         self.assertTrue(HELPER.exists(), 'missing firmware ALSA route repair')
