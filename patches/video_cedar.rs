@@ -49,6 +49,8 @@ mod async_parser;
 mod low_delay;
 #[path = "cedar_dmabuf.rs"]
 mod cedar_dmabuf;
+#[path = "cedar_fast_au.rs"]
+mod fast_au;
 
 use anyhow::anyhow;
 use anyhow::bail;
@@ -443,6 +445,14 @@ impl CedarLibs {
 /// Planner facts for one AU, mirroring the software rung's fold so colour and
 /// recovery behave identically across the two decoders.
 #[derive(Debug, Clone, Copy)]
+/// What a full plan said about the facts the cheap scanner claims to know.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct PlanTruth {
+    is_idr: bool,
+    has_b_slice: bool,
+    frame_num: u16,
+}
+
 struct CedarFacts {
     is_idr: bool,
     /// `None` = AU did not plan; the last colour stays.
@@ -503,6 +513,20 @@ pub(crate) struct NativeCedarDecoder {
     probed_fds: Vec<c_int>,
     /// Diagnostic only: duplicate the picture copy to add known memory traffic.
     copy_twice: bool,
+    /// SPS fields the cheap AU scanner needs; `None` until the first full plan.
+    sps_bits: Option<fast_au::SpsBits>,
+    /// Stream-order flags cached with `sps_bits`, so the cheap path can run the
+    /// same low-delay safety check without replanning.
+    poc_type: u8,
+    frame_mbs_only: bool,
+    /// Cheap planner path for plain non-IDR AUs, on unless pinned off.
+    fast_plan: bool,
+    /// Diagnostic: check every cheap answer against the full planner.
+    fast_verify: bool,
+    fast_matches: u64,
+    fast_mismatches: u64,
+    /// What the last full plan said, for the verification comparison.
+    last_plan_truth: Option<PlanTruth>,
     output_lag_frames: [u64; 5],
     pts_probe: bool,
     pts_ledger: PtsLedger<SubmittedPicture>,
@@ -587,6 +611,16 @@ impl NativeCedarDecoder {
             dmabuf_probe: std::env::var("PUNKTFUNK_CEDAR_DMABUF_PROBE").as_deref() == Ok("1"),
             probed_fds: Vec::new(),
             copy_twice: false,
+            sps_bits: None,
+            // Overwritten by the first full plan; the cheap path only runs once
+            // that has happened, so these are never used in isolation.
+            poc_type: 2,
+            frame_mbs_only: false,
+            fast_plan: std::env::var("PUNKTFUNK_CEDAR_FAST_PLAN").as_deref() != Ok("0"),
+            fast_verify: std::env::var("PUNKTFUNK_CEDAR_FAST_VERIFY").as_deref() == Ok("1"),
+            fast_matches: 0,
+            fast_mismatches: 0,
+            last_plan_truth: None,
             output_lag_frames: [0; 5],
             pts_probe: std::env::var("PUNKTFUNK_CEDAR_PTS_PROBE").as_deref() == Ok("1"),
             pts_ledger: PtsLedger::default(),
@@ -705,7 +739,81 @@ impl NativeCedarDecoder {
     /// IDR, colour, recovery for this AU from the shared planner — the same
     /// fold the software rung runs, so the two decoders cannot disagree on
     /// signalling.
+    /// Facts for an AU the cheap scanner called plain: no colour, no recovery
+    /// SEI, no IDR, by construction - the scanner refuses all of those.
+    fn plain_facts(&mut self, has_b_slice: bool, frame_num: u16) -> Result<CedarFacts> {
+        let safe = low_delay::safe_stream(self.poc_type, self.frame_mbs_only, has_b_slice);
+        if self.low_delay && !safe {
+            bail!("cedar: low-delay candidate refuses a reordered or interlaced AU");
+        }
+        self.zero_reorder_verified = safe;
+        let mark = self.recovery.note_h264(frame_num, false, None);
+        Ok(CedarFacts {
+            is_idr: false,
+            color: None,
+            recovery: punktfunk_core::reanchor::LocalRecovery {
+                sei_here: mark.sei_here,
+                is_recovery_point: mark.is_recovery_point,
+            },
+        })
+    }
+
+    /// Diagnostic: run the full planner as the oracle for what the cheap scanner
+    /// claimed, and ship the oracle's answer. A disagreement is a scanner bug,
+    /// so it is counted and logged rather than tolerated.
+    fn verify_plain_au(&mut self, au: &[u8], has_b_slice: bool, frame_num: u16) -> Result<CedarFacts> {
+        let planned = self.plan_facts_full(au);
+        let verdict = match (&planned, self.last_plan_truth) {
+            (Ok(_), Some(truth)) => {
+                if truth.is_idr || truth.has_b_slice != has_b_slice || truth.frame_num != frame_num {
+                    Some(truth)
+                } else {
+                    None
+                }
+            }
+            // The oracle failed or planned nothing where the scanner accepted an
+            // AU: that is a disagreement in the dangerous direction.
+            _ => Some(PlanTruth { is_idr: false, has_b_slice, frame_num }),
+        };
+        match verdict {
+            None => self.fast_matches += 1,
+            Some(truth) => {
+                self.fast_mismatches += 1;
+                tracing::warn!(target: "cedar", cheap_has_b = has_b_slice, cheap_frame_num = frame_num,
+                    plan_is_idr = truth.is_idr, plan_has_b = truth.has_b_slice,
+                    plan_frame_num = truth.frame_num, planned_ok = planned.is_ok(),
+                    "cedar-fast-au: the cheap scanner disagreed with the full planner");
+            }
+        }
+        if (self.fast_matches + self.fast_mismatches) % 600 == 0 {
+            tracing::info!(target: "cedar", matches = self.fast_matches,
+                mismatches = self.fast_mismatches, "cedar-fast-au: verification census");
+        }
+        planned
+    }
+
     fn plan_facts(&mut self, au: &[u8]) -> Result<CedarFacts> {
+        // An AU of plain non-IDR slices carries no state: its only facts are the
+        // slice types and the frame number, which the cheap scanner reads
+        // directly. Everything else - SPS, PPS, SEI, IDR, an unparseable header -
+        // goes to the full planner, which also refreshes what the cheap path
+        // needs. `PUNKTFUNK_CEDAR_FAST_PLAN=0` restores the old behaviour.
+        if self.fast_plan {
+            if let Some(bits) = self.sps_bits {
+                if let fast_au::AuClass::Plain { has_b_slice, frame_num } = fast_au::classify(au, &bits) {
+                    if self.fast_verify {
+                        return self.verify_plain_au(au, has_b_slice, frame_num);
+                    }
+                    return self.plain_facts(has_b_slice, frame_num);
+                }
+            }
+        }
+        self.plan_facts_full(au)
+    }
+
+    /// The full planner: authoritative for colour, recovery, shape and stream
+    /// order, and the only path that refreshes what the cheap scanner needs.
+    fn plan_facts_full(&mut self, au: &[u8]) -> Result<CedarFacts> {
         match self.planner.plan_au(au) {
             Ok(plan) => {
                 if let Some(shape) = unsupported_shape(
@@ -729,6 +837,17 @@ impl NativeCedarDecoder {
                 if self.low_delay && !safe { bail!("cedar: low-delay candidate refuses a reordered or interlaced AU"); }
                 self.zero_reorder_verified = safe;
                 self.pending_dims = Some((plan.picture.coded_width, plan.picture.coded_height));
+                self.sps_bits = Some(fast_au::SpsBits {
+                    log2_max_frame_num_minus4: plan.sps.log2_max_frame_num_minus4,
+                    separate_colour_plane: plan.sps.separate_colour_plane_flag,
+                });
+                self.poc_type = plan.sps.pic_order_cnt_type;
+                self.frame_mbs_only = plan.sps.frame_mbs_only_flag;
+                self.last_plan_truth = Some(PlanTruth {
+                    is_idr: plan.picture.is_idr,
+                    has_b_slice: plan.slices.iter().any(|slice| slice.header.slice_type.is_b()),
+                    frame_num: plan.picture.frame_num,
+                });
                 let c = plan.picture.colour;
                 let mark = self.recovery.note_h264(
                     plan.picture.frame_num,

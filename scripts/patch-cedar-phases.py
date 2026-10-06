@@ -51,9 +51,13 @@ def main():
     dmabuf_helper = port / "patches/cedar_dmabuf.rs"
     if not dmabuf_helper.is_file():
         raise SystemExit("cedar phases: missing dma-buf probe helper; no writes")
+    fast_au_helper = port / "patches/cedar_fast_au.rs"
+    if not fast_au_helper.is_file():
+        raise SystemExit("cedar phases: missing cheap AU scanner helper; no writes")
     text = text.replace(START, START_NEW).replace(DECODE, DECODE_NEW)
     shutil.copyfile(low_delay_helper, src / "cedar_low_delay.rs")
     shutil.copyfile(dmabuf_helper, src / "cedar_dmabuf.rs")
+    shutil.copyfile(fast_au_helper, src / 'cedar_fast_au.rs')
     shutil.copyfile(tuning_helper, src / 'cedar_tuning.rs')
     shutil.copyfile(async_helper, src / 'cedar_async.rs')
     shutil.copyfile(pts_helper, src / 'cedar_pts.rs')
