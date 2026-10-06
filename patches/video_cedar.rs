@@ -33,6 +33,10 @@ use std::ffi::c_void;
 use std::path::Path;
 use std::time::Instant;
 
+#[path = "cedar_phases.rs"]
+mod phases;
+use phases::{PhaseStats, elapsed_us};
+
 use anyhow::anyhow;
 use anyhow::bail;
 use anyhow::ensure;
@@ -460,6 +464,7 @@ pub(crate) struct NativeCedarDecoder {
     empties: u64,
     errors: u64,
     logged_at: u64,
+    profile: Option<PhaseStats>,
     start: Instant,
 }
 
@@ -520,6 +525,8 @@ impl NativeCedarDecoder {
             empties: 0,
             errors: 0,
             logged_at: 0,
+            profile: (std::env::var("PUNKTFUNK_CEDAR_PROFILE").as_deref() == Ok("1"))
+                .then(PhaseStats::default),
             start: Instant::now(),
         })
     }
@@ -532,7 +539,16 @@ impl NativeCedarDecoder {
     }
 
     pub(crate) fn decode(&mut self, au: &[u8]) -> Result<Option<CpuPlanarFrame>> {
+        let begin = self.profile.as_ref().map(|_| Instant::now());
         let result = self.decode_inner(au);
+        if let Some(profile) = self.profile.as_mut() {
+            profile.note_stage(2, elapsed_us(begin));
+            if self.aus.is_multiple_of(120) {
+                tracing::info!(target: "cedar", summary = %profile.json(self.aus, self.frames_out),
+                    "cedar-phase-json");
+                *profile = PhaseStats::default();
+            }
+        }
         if let Err(e) = &result {
             self.errors += 1;
             tracing::warn!(target: "cedar", error = %format!("{e:#}"),
@@ -543,7 +559,11 @@ impl NativeCedarDecoder {
 
     fn decode_inner(&mut self, au: &[u8]) -> Result<Option<CpuPlanarFrame>> {
         self.aus += 1;
+        let begin = self.profile.as_ref().map(|_| Instant::now());
         let facts = self.plan_facts(au)?;
+        if let Some(profile) = self.profile.as_mut() {
+            profile.note_stage(0, elapsed_us(begin));
+        }
         if let Some(c) = facts.color {
             self.color = c;
         }
@@ -566,8 +586,12 @@ impl NativeCedarDecoder {
         // Feed first, then drain: one-in/one-out normally, and a frame the
         // SBM-full drain produced rides the same FIFO so display order never
         // inverts.
+        let begin = self.profile.as_ref().map(|_| Instant::now());
         if let Some(frame) = self.feed_au(au, &facts)? {
             self.pending.push_back(frame);
+        }
+        if let Some(profile) = self.profile.as_mut() {
+            profile.note_stage(1, elapsed_us(begin));
         }
         if facts.is_idr {
             self.anchored = true;
@@ -772,14 +796,25 @@ impl NativeCedarDecoder {
     /// wins (the pump's queue rule).
     fn drain(&mut self, facts: &CedarFacts) -> Result<Option<CpuPlanarFrame>> {
         let mut newest: Option<CpuPlanarFrame> = None;
+        let mut produced = 0usize;
         for _ in 0..DRAIN_ROUNDS {
+            let begin = self.profile.as_ref().map(|_| Instant::now());
             // SAFETY: `handle` is live; the flags are the live-stream contract
             // (not end-of-stream, any picture, B-frames not expected on the
             // wire) and the clock is this decoder's monotonic microsecond time.
             let rc = unsafe { (self.libs.decode)(self.handle, 0, 0, 0, self.now_us()) };
+            if let Some(profile) = self.profile.as_mut() {
+                profile.note_vendor(rc, elapsed_us(begin));
+            }
             match rc {
                 VDECODE_RESULT_FRAME_DECODED | VDECODE_RESULT_KEYFRAME_DECODED => {
                     if let Some(frame) = self.take_picture(facts)? {
+                        produced += 1;
+                        if newest.is_some() {
+                            if let Some(profile) = self.profile.as_mut() {
+                                profile.replaced_pictures += 1;
+                            }
+                        }
                         newest = Some(frame);
                     }
                 }
@@ -799,20 +834,36 @@ impl NativeCedarDecoder {
                 other => bail!("cedar: DecodeVideoStream rc={other}"),
             }
         }
+        if let Some(profile) = self.profile.as_mut() {
+            profile.note_drain(produced);
+        }
         Ok(newest)
     }
 
     fn take_picture(&mut self, facts: &CedarFacts) -> Result<Option<CpuPlanarFrame>> {
+        let begin = self.profile.as_ref().map(|_| Instant::now());
         // SAFETY: `handle` is live; NULL means no display picture is pending.
         let pic = unsafe { (self.libs.request_picture)(self.handle, STREAM_INDEX) };
+        if let Some(profile) = self.profile.as_mut() {
+            profile.note_stage(3, elapsed_us(begin));
+            if pic.is_null() { profile.empty_pictures += 1; }
+        }
         if pic.is_null() {
             return Ok(None);
         }
+        let begin = self.profile.as_ref().map(|_| Instant::now());
         let copied = self.copy_picture(pic, facts);
+        if let Some(profile) = self.profile.as_mut() {
+            profile.note_copy(elapsed_us(begin));
+        }
+        let begin = self.profile.as_ref().map(|_| Instant::now());
         // SAFETY: `pic` is the picture RequestPicture handed over; the return
         // call releases it back to the frame buffer manager exactly once, on
         // every path — including a failed copy above.
         let rc = unsafe { (self.libs.return_picture)(self.handle, pic) };
+        if let Some(profile) = self.profile.as_mut() {
+            profile.note_stage(5, elapsed_us(begin));
+        }
         if rc != 0 {
             tracing::warn!(target: "cedar", rc,
                 "cedar: ReturnPicture refused a picture from this FBM");
@@ -825,6 +876,12 @@ impl NativeCedarDecoder {
         // read below is a scalar or a plane range the header documents, and
         // the pointer stays valid until ReturnPicture (already en route).
         let p = unsafe { &*pic };
+        if self.profile.is_some() && (self.aus <= 8 || self.aus.is_multiple_of(120)) {
+            tracing::info!(target: "cedar", au = self.aus, slot = p.n_id, pts = p.n_pts,
+                progressive = p.b_is_progressive, top_field_first = p.b_top_field_first,
+                frame_error = p.b_frame_error_flag, fd = p.n_buf_fd,
+                "cedar-picture-metadata (slot is not AU identity)");
+        }
         let width = p.n_width.max(0) as u32;
         let height = p.n_height.max(0) as u32;
         ensure!(width > 0 && height > 0, "cedar: empty picture {width}x{height}");

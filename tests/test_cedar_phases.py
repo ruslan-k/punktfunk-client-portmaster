@@ -1,0 +1,56 @@
+import pathlib
+import unittest
+
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+
+class CedarPhaseTests(unittest.TestCase):
+    def test_profile_is_opt_in_and_observes_vendor_return_codes(self):
+        src = (ROOT / 'patches/video_cedar.rs').read_text()
+        self.assertIn('PUNKTFUNK_CEDAR_PROFILE', src)
+        self.assertIn('profile.note_vendor(rc,', src)
+        self.assertIn('profile.note_copy(', src)
+        self.assertIn('cedar-phase-json', src)
+        # Instrumentation must not alter feeding or the drain policy.
+        self.assertIn('data.n_pts = -1;', src)
+        self.assertIn('VDECODE_RESULT_CONTINUE | VDECODE_RESULT_NO_BITSTREAM => break,', src)
+
+    def test_session_patcher_rejects_each_drift_before_copying_helper(self):
+        import importlib.util
+        import tempfile
+        import subprocess
+        import sys
+        script = ROOT / 'scripts/patch-cedar-phases.py'
+        spec = importlib.util.spec_from_file_location('cedar_phases_patch', script)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        for bad in [None, module.START, module.DECODE]:
+            with tempfile.TemporaryDirectory() as temp:
+                src = pathlib.Path(temp) / 'crates/pf-client-core/src'
+                src.mkdir(parents=True)
+                text = module.START + module.DECODE
+                if bad is not None:
+                    text = text.replace(bad, '')
+                path = src / 'session.rs'
+                path.write_text(text)
+                result = subprocess.run([sys.executable, str(script), temp, str(ROOT)],
+                                        capture_output=True, text=True)
+                if bad is None:
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertIn('queue_us', path.read_text())
+                    self.assertTrue((src / 'cedar_phases.rs').is_file())
+                else:
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertEqual(path.read_text(), text)
+                    self.assertFalse((src / 'cedar_phases.rs').exists())
+
+    def test_profile_helper_has_executable_rust_tests_in_build(self):
+        self.assertTrue((ROOT / 'patches/cedar_phases.rs').is_file())
+        script = (ROOT / 'scripts/build.sh').read_text()
+        self.assertIn('rustc --test', script)
+        self.assertIn('cedar-phase-tests', script)
+        self.assertIn('patch-cedar-phases.py', script)
+        self.assertLess(script.index('patch-cedar-phases.py'), script.index('cargo build --locked'))
+
+if __name__ == '__main__':
+    unittest.main()

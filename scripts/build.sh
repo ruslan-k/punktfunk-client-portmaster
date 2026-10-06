@@ -110,6 +110,7 @@ python3 "$ROOT/scripts/patch-probe-budget.py" "$SRC/punktfunk"
 
 echo "==> install the native Cedar decoder rung"
 python3 "$ROOT/scripts/patch-cedar.py" "$SRC/punktfunk" "$ROOT"
+python3 "$ROOT/scripts/patch-cedar-phases.py" "$SRC/punktfunk" "$ROOT"
 
 echo "==> cross-build Punktfunk CLI + gamepad console session"
 export PATH="/root/.cargo/bin:$PATH"
@@ -137,7 +138,12 @@ rustup component add rustfmt --toolchain "$RUST_TOOLCHAIN"
 rustfmt --edition 2024 \
   crates/pf-client-core/src/audio.rs \
   crates/pf-client-core/src/pad_audio.rs \
-  crates/pf-client-core/src/video_cedar.rs
+  crates/pf-client-core/src/video_cedar.rs \
+  crates/pf-client-core/src/cedar_phases.rs
+
+# Pure-std phase counters are exercised on the native builder, not merely compiled.
+rustc --test --edition 2024 "$ROOT/patches/cedar_phases.rs" -o "$BUILD/cedar-phase-tests"
+"$BUILD/cedar-phase-tests"
 
 cargo build --locked --release --target "$TARGET" \
   -p punktfunk-cli \
