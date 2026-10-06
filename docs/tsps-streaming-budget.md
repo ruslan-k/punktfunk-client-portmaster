@@ -101,6 +101,41 @@ by hand. `PUNKTFUNK_CEDAR_VE_FREQ` writes `VConfig.nVeFreq` (the vendor's MHz
 unit) and exists only for a controlled one-axis experiment; 0 keeps the SoC
 default and is the shipped value. The client never raises it unasked.
 
+
+### VE clock does not set the decode time
+
+Four device runs at 1280x720@60 with the gate on, each `VConfig.nVeFreq` value
+confirmed by reading `ve/clk_rate` from debugfs during the stream:
+
+| `nVeFreq` | measured `ve` | decode mean |
+| --- | --- | --- |
+| 0 (SoC default) | 576 MHz | 4.565 ms |
+| 0 (repeat) | 576 MHz | 4.538 ms |
+| 696 | 696 MHz | 4.430 ms |
+| 696 (repeat) | 696 MHz | 4.449 ms |
+| 1152 | 1152 MHz | 4.548 ms |
+
+Doubling the encoder clock changed nothing measurable, so the vendor wait is not
+VE-clock-bound; the small 696 MHz offset (~0.12 ms) is not monotonic and is not
+worth a power cost. `PUNKTFUNK_CEDAR_VE_FREQ` stays an opt-in diagnostic and the
+shipped default stays 0.
+
+### The exported frames are importable dma-bufs
+
+Read-only device evidence for a zero-copy presenter:
+
+- Every decoded picture slot carries a stable descriptor: `fd = slot + 39`,
+  unchanged across thousands of frames (14 slots).
+- `/sys/kernel/debug/dma_buf/bufinfo` lists 14 buffers of **1384448 bytes**
+  (1382400 + 2 KiB) attached to `1c0e000.ve`; 1382400 is exactly 1280x720 YV12.
+- The vendor reports `e_pixel_format = 4` (`YV12`, plane order Y, V, U) with
+  `lineStride = 1280` and zero crop.
+
+`PUNKTFUNK_CEDAR_DMABUF_PROBE=1` maps each descriptor once, compares it against
+the copy this rung just produced at the standard `YV12` offsets, and logs the
+result. It is read-only and never selects the frame path; the plan is to prove
+the layout on the device before any presenter import is written.
+
 ## Native Cedar hardware decode (pin-only rung)
 
 The port installs a fifth decoder rung, `native-cedar`, and config.env selects

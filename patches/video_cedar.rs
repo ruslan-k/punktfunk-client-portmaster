@@ -47,6 +47,8 @@ use tuning::CedarTuning;
 mod async_parser;
 #[path = "cedar_low_delay.rs"]
 mod low_delay;
+#[path = "cedar_dmabuf.rs"]
+mod cedar_dmabuf;
 
 use anyhow::anyhow;
 use anyhow::bail;
@@ -497,6 +499,8 @@ pub(crate) struct NativeCedarDecoder {
     append_aud: bool,
     low_delay: bool,
     zero_reorder_verified: bool,
+    dmabuf_probe: bool,
+    probed_fds: Vec<c_int>,
     output_lag_frames: [u64; 5],
     pts_probe: bool,
     pts_ledger: PtsLedger<SubmittedPicture>,
@@ -578,6 +582,8 @@ impl NativeCedarDecoder {
             append_aud: false,
             low_delay: false,
             zero_reorder_verified: false,
+            dmabuf_probe: std::env::var("PUNKTFUNK_CEDAR_DMABUF_PROBE").as_deref() == Ok("1"),
+            probed_fds: Vec::new(),
             output_lag_frames: [0; 5],
             pts_probe: std::env::var("PUNKTFUNK_CEDAR_PTS_PROBE").as_deref() == Ok("1"),
             pts_ledger: PtsLedger::default(),
@@ -1179,6 +1185,9 @@ impl NativeCedarDecoder {
         // SAFETY: each supported branch above writes exactly y_len + 2*c_len
         // bytes into the allocation before this point.
         unsafe { packed.set_len(total_len) };
+        if self.dmabuf_probe && p.n_buf_fd >= 0 {
+            self.probe_dmabuf(p.n_buf_fd, width, height, &packed, y_len, c_len);
+        }
         if !self.format_logged {
             self.format_logged = true;
             tracing::info!(target: "cedar",
@@ -1199,6 +1208,75 @@ impl NativeCedarDecoder {
             s
         });
         Ok(CedarOutput { frame, stamp })
+    }
+
+    /// Diagnostic only: map the vendor's exported frame and compare it with the
+    /// copy this rung just produced. It never changes the frame path, and each
+    /// descriptor is probed once.
+    fn probe_dmabuf(
+        &mut self,
+        fd: c_int,
+        width: u32,
+        height: u32,
+        packed: &[u8],
+        y_len: usize,
+        c_len: usize,
+    ) {
+        if self.probed_fds.contains(&fd) {
+            return;
+        }
+        self.probed_fds.push(fd);
+        let Some(offsets) = cedar_dmabuf::yv12_offsets(width, height) else {
+            tracing::warn!(target: "cedar", fd, "cedar-dmabuf-probe: geometry overflow");
+            return;
+        };
+        // SAFETY: lseek on a live vendor descriptor only asks for its size.
+        let len = unsafe { libc::lseek(fd, 0, libc::SEEK_END) };
+        if len <= 0 {
+            tracing::warn!(target: "cedar", fd, len, "cedar-dmabuf-probe: descriptor has no size");
+            return;
+        }
+        let len = len as usize;
+        // SAFETY: read-only shared mapping of the vendor's buffer, sized by its
+        // own lseek; the descriptor stays owned by the decoder.
+        let base = unsafe {
+            libc::mmap(
+                std::ptr::null_mut(),
+                len,
+                libc::PROT_READ,
+                libc::MAP_SHARED,
+                fd,
+                0,
+            )
+        };
+        if base == libc::MAP_FAILED {
+            tracing::warn!(target: "cedar", fd, "cedar-dmabuf-probe: mmap refused");
+            return;
+        }
+        // SAFETY: mmap returned a readable span of `len` bytes; nothing else
+        // aliases it while this comparison runs.
+        let blob = unsafe { std::slice::from_raw_parts(base.cast::<u8>(), len) };
+        let planes = packed.get(..y_len + 2 * c_len);
+        let (y_plane, u_plane, v_plane) = match planes {
+            Some(p) => (
+                &p[..y_len],
+                &p[y_len..y_len + c_len],
+                &p[y_len + c_len..],
+            ),
+            None => (&packed[..0], &packed[..0], &packed[..0]),
+        };
+        let same = cedar_dmabuf::matches(blob, offsets, y_plane, v_plane, u_plane);
+        let first_difference = if same {
+            None
+        } else {
+            cedar_dmabuf::first_difference(blob, offsets, y_plane, v_plane, u_plane)
+        };
+        tracing::info!(target: "cedar", fd, len,
+            expected = ?cedar_dmabuf::packed_len(width, height), offsets = ?offsets,
+            copied = packed.len(), matches = same, first_difference = ?first_difference,
+            "cedar-dmabuf-probe (read-only; the frame path is unchanged)");
+        // SAFETY: the mapping above is live and unaliased; unmapping once closes it.
+        unsafe { libc::munmap(base, len) };
     }
 
     fn maybe_log(&mut self) {

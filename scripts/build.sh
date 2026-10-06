@@ -145,7 +145,8 @@ rustfmt --edition 2024 \
   crates/pf-client-core/src/cedar_pts.rs \
   crates/pf-client-core/src/cedar_tuning.rs \
   crates/pf-client-core/src/cedar_async.rs \
-  crates/pf-client-core/src/cedar_low_delay.rs
+  crates/pf-client-core/src/cedar_low_delay.rs \
+  crates/pf-client-core/src/cedar_dmabuf.rs
 
 # Pure-std phase counters are exercised on the native builder, not merely compiled.
 rustc --test --edition 2024 "$ROOT/patches/cedar_phases.rs" -o "$BUILD/cedar-phase-tests"
@@ -158,6 +159,8 @@ rustc --test --edition 2024 "$ROOT/tests/cedar_async_tests.rs" -o "$BUILD/cedar-
 "$BUILD/cedar-async-tests"
 rustc --test --edition 2024 "$ROOT/patches/cedar_low_delay.rs" -o "$BUILD/cedar-low-delay-tests"
 "$BUILD/cedar-low-delay-tests"
+rustc --test --edition 2024 "$ROOT/patches/cedar_dmabuf.rs" -o "$BUILD/cedar-dmabuf-tests"
+"$BUILD/cedar-dmabuf-tests"
 
 cargo build --locked --release --target "$TARGET" \
   -p punktfunk-cli \
