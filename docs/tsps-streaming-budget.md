@@ -334,6 +334,35 @@ profiler (unprofiled 4.333 ms against profiled 4.293 ms) and not the cost of rea
 the clock (about 1.3 us per call on this device). Nothing in the loop's visible code
 explains it, so it stays open: claiming a fix here would be a guess.
 
+
+### Zero-copy: the shape the presenter change must have
+
+The presenter already owns everything the colour path needs - `CscPass::new_planar`
+builds the three-binding planar pass, `bind_planes_planar` binds Y, Cb, Cr, and the
+CPU I420 rung proves both on this device - so the missing piece is only the import.
+
+It has to go through the existing cached importer, and that is not obvious from the
+outside. `dmabuf::get_or_import` takes the frame **by value** (that is how the
+decoder's `DrmFrameGuard` reaches `HwFrame::_guard`; `FrameGuard` is `pub(crate)` in
+`pf-client-core`, so the presenter can neither name nor construct one) and it caches
+imported images per `pool_key` - one import per picture slot, not per frame, because
+an import costs image creates, memory imports and mappings.
+
+A first attempt bolted a separate `import_planar` beside that function. It compiled
+in the client crate but not in the presenter (two errors: `FrameGuard` not in scope,
+and a tuple struct with private fields), and more importantly it would have
+re-imported three images **every frame** - more expensive than the 0.9 ms copy it
+removes. It was reverted rather than patched over.
+
+The change that does work generalises `HwFrame`/`Planes` from `[_; 2]` to a plane
+list plus a `planar` flag, keeps the per-`pool_key` cache, and picks the CSC pass by
+that flag. The client half is already in place and tested: `CedarFrameGuard` returns
+the vendor picture to the decoder thread over a channel when the presenter drops it
+after its fence, and `FrameGuard::Cedar` is wired into the enum by the patcher.
+
+Not done, and not claimed: the lane wiring, the frame construction in the Cedar rung
+behind an opt-in knob, the release drain on the decoder thread, and the device test.
+
 ## Native Cedar hardware decode (pin-only rung)
 
 The port installs a fifth decoder rung, `native-cedar`, and config.env selects
