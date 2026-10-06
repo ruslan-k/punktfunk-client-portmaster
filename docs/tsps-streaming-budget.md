@@ -335,6 +335,33 @@ the clock (about 1.3 us per call on this device). Nothing in the loop's visible 
 explains it, so it stays open: claiming a fix here would be a guess.
 
 
+### Zero-copy on this device: the import is refused, measured
+
+First device run of `PUNKTFUNK_CEDAR_ZEROCOPY=1` (build 5ff81cc): the picture
+appeared, and it was NOT zero-copy. The presenter refused the chroma plane and the
+client demoted, safely:
+
+```
+WARN presenter: hardware present failed error=plane 1: create 640x360 R8_UNORM
+     image (modifier 0x0000000000000000): ERROR_INVALID_DRM_FORMAT_MODIFIER
+WARN presenter: demoting the decoder to software
+stats: "decoder":"software"  e2e mean 89-167 ms, 54 fps
+```
+
+So `vkCreateImage` accepts the luma plane (1280x720 R8_UNORM, LINEAR) and refuses
+the 640x360 chroma plane with the same format and modifier. The rung's
+`modifier_importable()` query answered yes for the pair, which is why the failure
+surfaced at create rather than as a clean refusal - the query is not sufficient
+here, and a driver that refuses create after answering the query is exactly the
+case the demotion ladder exists for.
+
+What is NOT yet known, and must be measured with the device extension enabled
+(a plain `vkGetPhysicalDeviceFormatProperties2` probe reports zero modifiers
+because `VK_EXT_image_drm_format_modifier` is not enabled without a device):
+whether any (format, extent, modifier) combination imports these planes, or
+whether a single linear dma-buf with three R8 planes is simply not importable on
+this Mali stack. Until that is answered, zero-copy stays opt-in and unclaimed.
+
 ### Zero-copy: the client half, and what it costs
 
 `PUNKTFUNK_CEDAR_ZEROCOPY=1` makes the rung hand the presenter the vendor's own
