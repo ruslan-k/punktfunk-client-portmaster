@@ -294,6 +294,46 @@ A clip comparison can only mislead if it is not checked against the live stream:
 this one first looked like a 27% win and turned out to describe a stream the host
 never sends.
 
+
+### Client-side work, first item: a cheap planner path (landed, verified)
+
+An ordinary P AU carries no colour, recovery or shape state: its only facts are the
+slice types and the frame number. `patches/cedar_fast_au.rs` reads exactly those
+from the Annex-B NALs - refusing every AU that contains an SPS, PPS, SEI, IDR,
+partition NAL, an unparseable slice header or slices that disagree on `frame_num`,
+and any AU with no VCL NAL at all - and the full planner still runs for all of
+them, refreshing what the cheap path needs. `PUNKTFUNK_CEDAR_FAST_PLAN=0` restores
+the old behaviour.
+
+The scanner is verified against the planner as an oracle on the live stream:
+`PUNKTFUNK_CEDAR_FAST_VERIFY=1` runs both, ships the planner's answer, and counts
+disagreements. On a 720p60 run: **2400+ AUs compared, 0 mismatches**.
+
+Device A/B, same content, profiled:
+
+| | planner stage | decode | capture-to-presentation |
+| --- | --- | --- | --- |
+| fast path on | **69 us** | **4.279 ms** | 12.098 ms |
+| `FAST_PLAN=0` | 356 us | 4.543 ms | 12.381 ms |
+
+That is **-0.264 ms** on decode, with 60 FPS, zero lag, zero errors and every PTS
+matched in both runs. The planner stage itself falls 356 -> 69 us, so the mechanism
+is the one claimed, not a run-to-run artefact.
+
+### The drain tail: measured, not yet attributed
+
+Stage 6/7/8/9 instrumentation splits the drain loop: the frame arm is 913 us per
+call (of which `take_picture` - RequestPicture, copy, ReturnPicture - is 909 us),
+the non-frame arm 0.4 us, and the FIFO/ledger work inside the frame arm about 4 us.
+That accounts for the loop's arms, yet about **330-350 us per AU** of the drain
+remains outside every arm, and the session's own independent timer sees it too, so
+it is real rather than a profiling artefact.
+
+It is not the retry sleep (`POLL_US=0` measured 4.300 ms against 4.258 ms), not the
+profiler (unprofiled 4.333 ms against profiled 4.293 ms) and not the cost of reading
+the clock (about 1.3 us per call on this device). Nothing in the loop's visible code
+explains it, so it stays open: claiming a fix here would be a guess.
+
 ## Native Cedar hardware decode (pin-only rung)
 
 The port installs a fifth decoder rung, `native-cedar`, and config.env selects
