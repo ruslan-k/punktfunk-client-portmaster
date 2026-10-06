@@ -261,6 +261,39 @@ costs 647 us more, which eats the whole gain. Worse, the presenter now has to
 scale instead of blit and end-to-end latency nearly doubles. A lower resolution is
 therefore not a cheaper decode here, it is a slower stream.
 
+
+### The bitstream axis, measured to the end
+
+The last suggestion for shrinking the hardware wait was to make the *stream* cheaper
+to decode (deblocking off, a faster encoder profile). The vendor's own demo decoder
+was timed on identical 720p60 content at one bitrate, encoded different ways
+(mean of two interleaved runs, 1200 frames each):
+
+| encoding | ms/frame | vs baseline |
+| --- | --- | --- |
+| x264 veryfast | 3.719 | — |
+| + `no-8x8dct` | 3.717 | 0% |
+| + `no-weightb` | 3.644 | -2% |
+| + `partitions=none` | 3.782 | +2% |
+| + `no-cabac` (CAVLC) | 3.631 | -2% |
+| + `ref=1` | 3.721 | 0% |
+| + `no-deblock` | 3.648 | -2% |
+| **+ `bframes=0`** | **2.711** | **-27%** |
+| `ultrafast` (all of them) | 2.461 | -34% |
+
+One tool accounts for almost all of it: **B-frames**. Every other coding tool is
+worth 0-6%, which also retires the deblocking suggestion - it is 2% here.
+
+And that headroom does not exist in production: the host documents "Low-latency
+preset, B-frames off" (`crates/pf-encode/src/lib.rs`), and the vendor output-hold
+gate only arms after the planner confirms the live stream has no B slices, which it
+does. The production stream is therefore already the cheap variant: the client
+measures 2.822 ms per frame on it, against 2.711 ms for the B-less clip here.
+
+A clip comparison can only mislead if it is not checked against the live stream:
+this one first looked like a 27% win and turned out to describe a stream the host
+never sends.
+
 ## Native Cedar hardware decode (pin-only rung)
 
 The port installs a fifth decoder rung, `native-cedar`, and config.env selects
