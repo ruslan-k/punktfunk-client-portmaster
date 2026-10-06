@@ -108,6 +108,9 @@ PY
 echo "==> allow TSPS QUIC GSO fallback in presence and wake probes"
 python3 "$ROOT/scripts/patch-probe-budget.py" "$SRC/punktfunk"
 
+echo "==> install the native Cedar decoder rung"
+python3 "$ROOT/scripts/patch-cedar.py" "$SRC/punktfunk" "$ROOT"
+
 echo "==> cross-build Punktfunk CLI + gamepad console session"
 export PATH="/root/.cargo/bin:$PATH"
 export CARGO_TARGET_DIR="$TARGET_DIR"
@@ -130,10 +133,11 @@ rustup override set "$RUST_TOOLCHAIN"
 rustup target add "$TARGET" --toolchain "$RUST_TOOLCHAIN"
 rustup component add rustfmt --toolchain "$RUST_TOOLCHAIN"
 
-# Make the copied backend pass upstream formatting before compiling it.
+# Make the copied backends pass upstream formatting before compiling them.
 rustfmt --edition 2024 \
   crates/pf-client-core/src/audio.rs \
-  crates/pf-client-core/src/pad_audio.rs
+  crates/pf-client-core/src/pad_audio.rs \
+  crates/pf-client-core/src/video_cedar.rs
 
 cargo build --locked --release --target "$TARGET" \
   -p punktfunk-cli \

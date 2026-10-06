@@ -102,11 +102,14 @@ if ! (
   done
 fi
 
-# First-run software budget: 720p30. The UI can still select 60 FPS;
-# never rewrite existing user settings or paired-host identities.
+# First-run budget: 720p30. The UI can still select 60 FPS; never rewrite
+# existing user settings or paired-host identities.
 python3 "$GAMEDIR/stream-defaults.py" \
   "${PUNKTFUNK_CONFIG_DIR:-$HOME/.config/punktfunk}/client-gtk-settings.json" || exit 1
-export PUNKTFUNK_DECODER=${PUNKTFUNK_DECODER:-software}
+# Decode backend: the native Cedar hardware rung by default. It falls back
+# down the standard ladder — software included — when the vendor stack is
+# absent or a decode-error streak forms; override in config.env or the env.
+export PUNKTFUNK_DECODER=${PUNKTFUNK_DECODER:-native-cedar}
 export RUST_LOG=${RUST_LOG:-info}
 
 if [ -n "${sdl_controllerconfig:-}" ]; then

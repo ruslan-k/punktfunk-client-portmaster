@@ -33,3 +33,29 @@ backlog flush/keyframe counts, ALSA playback-ready and hardware running state,
 then verify audible sound and clean return to Spruce. Unit tests and successful
 CI do not prove the physical acceptance criteria. Record device results below
 only after the fresh test.
+
+## Native Cedar hardware decode (pin-only rung)
+
+The port installs a fifth decoder rung, `native-cedar`, and config.env selects
+it by default. It `dlopen`s the device's vendor decoder stack
+(`/usr/lib/libvdecoder.so` and friends) at session start, registers the
+plugin, decodes H.264 in hardware, and copies each `VideoPicture` into the
+packed-I420 `CpuPlanarFrame` the software rung already feeds. The pin is
+`PUNKTFUNK_DECODER=native-cedar`; `auto` never reaches the rung, and any init
+failure or decode-error streak falls down the standard ladder — software
+included — so a device without the vendor stack runs exactly as before.
+
+Evidence boundary: `cedar:`-targeted logs name the load, init, first picture,
+format/stride/offsets and a periodic cadence (`aus`, `frames`, `empties`,
+`errors`). A picture arriving in a `VideoPicture` format outside planar
+`YUV_PLANER_420`/`YV12`/`NV12`/`NV21` refuses (typed error) rather than
+guessing. The `stats:` decode tag for its frames is `native-cedar`. The
+zero-copy follow-up (`VideoPicture.nBufFd` → presenter dmabuf import) is
+deliberately out of scope for this first stream; timing, frame order and
+colour are proven on the copy path first.
+
+Acceptance for the rung, beyond the CI build: menu-launched 720p30 stream with
+`cedar: first hardware frame delivered`, non-zero `frames` cadence, colours
+matching the software run on the same scene, and a clean demotion if the
+vendor stack is absent (`native Cedar init failed — demoting to the standard
+ladder`).

@@ -16,7 +16,7 @@ The current source lock targets SpruceOS nightly **v4.5.1-20261004.2** (developm
 - integration with SpruceOS `asound-setup.sh`, including its current speaker/Bluetooth route
 - one PortMaster launcher with integrated host discovery, pairing and settings
 - persistent Punktfunk trust/settings store on the SD card
-- software H.264 decode as the conservative default; Vulkan is still used for presentation
+- native **Cedar hardware H.264 decode** (`PUNKTFUNK_DECODER=native-cedar` default) through the device's vendor `libvdecoder` stack, copied into the CPU planar path, with an automatic fallback down the standard ladder (software included); Vulkan is still used for presentation
 - build metadata, source revisions and SHA-256 checksums
 - GitHub Actions CI, rolling `edge` prerelease from `main`, and stable releases from `v*` tags
 
@@ -35,7 +35,7 @@ The wire protocol, trust store, host discovery/pairing, video decoder, renderer 
 
 This is still an **experimental TSPS port**. CI verifies the aarch64 build and package structure. The final Vulkan WSI/Mali path and end-to-end latency need validation on real TrimUI hardware after each SpruceOS/Punktfunk bump.
 
-The default decoder is software H.264 so the port does not assume Vulkan Video decode support. That does **not** remove the Vulkan requirement for the current `punktfunk-session` presenter.
+The default decoder is the native Cedar rung: the vendor `libvdecoder` stack is `dlopen`ed at session start and H.264 is decoded on the VPU, with each picture copied into the same CPU planar path the software rung feeds. If the vendor stack is missing, init fails, or a decode-error streak forms, the session falls back down the standard ladder — software included — so a device without Cedar runs exactly as before. That does **not** remove the Vulkan requirement for the current `punktfunk-session` presenter.
 
 ## Install
 

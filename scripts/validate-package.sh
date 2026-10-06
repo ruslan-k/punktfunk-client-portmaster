@@ -23,6 +23,11 @@ if grep -q -- '--browse needs the console UI' "$STAGE/.session-strings"; then
   echo 'Invalid package: session was built without the ui feature' >&2
   exit 1
 fi
+# The native Cedar rung must be compiled in and addressable by its pin name:
+# config.env defaults to `native-cedar`, so a build that lost the patch would
+# ship a client whose decoder default names a rung it does not contain.
+grep -q 'native-cedar' "$STAGE/.session-strings"
+grep -q 'AddVDPlugin' "$STAGE/.session-strings"
 rm "$STAGE/.session-strings"
 bash -n "$STAGE/Punktfunk.sh" \
   "$STAGE/punktfunk/launcher-common.sh" "$STAGE/punktfunk/runtime-env.sh"
