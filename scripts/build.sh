@@ -91,7 +91,7 @@ shutil.copyfile(
 print("installed ALSA playback backend and embedded pad-audio stub")
 PY
 
-echo "==> cross-build Punktfunk CLI + minimal session"
+echo "==> cross-build Punktfunk CLI + gamepad console session"
 export PATH="/root/.cargo/bin:$PATH"
 export CARGO_TARGET_DIR="$TARGET_DIR"
 export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
@@ -117,8 +117,8 @@ rustfmt --edition 2024 \
 cargo build --locked --release --target "$TARGET" \
   -p punktfunk-cli \
   -p punktfunk-client-session \
-  --no-default-features
-
+  --no-default-features \
+  --features punktfunk-client-session/ui
 echo "==> stage PortMaster package"
 cp -a "$ROOT/package/." "$STAGE/"
 mkdir -p "$STAGE/punktfunk/bin" "$STAGE/punktfunk/libs" "$STAGE/punktfunk/licenses"

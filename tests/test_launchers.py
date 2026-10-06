@@ -56,6 +56,10 @@ class Launchers(unittest.TestCase):
         result = self.run_launcher("Punktfunk.sh", "saved\t192.0.2.10:47990")
         self.assertEqual(result["argv"], ["--browse", "192.0.2.10:47990", "--fullscreen", "--stats"])
 
+    def test_build_enables_session_console_ui(self):
+        build = (ROOT / "scripts/build.sh").read_text()
+        self.assertIn("--features punktfunk-client-session/ui", build)
+
     def test_no_desktop_display_selects_kmsdrm(self):
         self.assertEqual(self.run_launcher("Punktfunk Setup.sh")["video"], "kmsdrm")
 

@@ -14,6 +14,12 @@ test -f "$STAGE/punktfunk/libs/libSDL3.so.0"
 strings "$STAGE/punktfunk/libs/libSDL3.so.0" > "$STAGE/.sdl-strings"
 grep -qx 'kmsdrm' "$STAGE/.sdl-strings"
 rm "$STAGE/.sdl-strings"
+strings "$STAGE/punktfunk/bin/punktfunk-session" > "$STAGE/.session-strings"
+if grep -q -- '--browse needs the console UI' "$STAGE/.session-strings"; then
+  echo 'Invalid package: session was built without the ui feature' >&2
+  exit 1
+fi
+rm "$STAGE/.session-strings"
 bash -n "$STAGE/Punktfunk.sh" "$STAGE/Punktfunk Setup.sh" \
   "$STAGE/punktfunk/launcher-common.sh" "$STAGE/punktfunk/runtime-env.sh"
 
