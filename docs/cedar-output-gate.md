@@ -6,7 +6,7 @@ bounded 5000 us polling; explicit 0/0 restores the original vendor path.
 Read-only analysis of the actual TSPS libraries found a previously untranscribed
 VConfig word. No firmware, library instruction, or reference-picture data is patched.
 
-- libawh264.so SHA-256: 318697525414467680c2c6355b23b7c9b43abfba2f369499d0849c07bd7c94a8.
+- libawh264.so SHA-256: 052e33068070d08e0d324fc181b0381f3ac071f02f014c65605cc51d1a26f373.
 - H264DecoderInit at 0x17ab4 copies 216 bytes into context+0x68.
 - H264SortDisplayFrameOrder at 0x21928 loads context+0x128, masks bit 0,
   and gates the branch to 0x22208 (return without display publication).
@@ -51,4 +51,24 @@ Both real KMS frames are clean and show native-cedar. MainUI returned after each
 bounded run. No system library was modified. Paired state was preserved.
 
 This is a desktop-stream decode/display result, not a verified gameplay or
-input-to-photon benchmark. Final ordinary-launch verification is tracked separately.
+input-to-photon benchmark.
+
+## Final runtime-default verification: 9badbe4
+
+A 180-second quiet run used the shipped runtime defaults, no tuning/profile/PTS
+probe overrides. The planner reported progressive POC type 2; auto verified both
+instruction windows and enabled the output gate. Bounded polling was 5000 us.
+
+- Native Cedar, actual received/decoded/presented median 19.841 FPS.
+- Sample-weighted mean decode 5.024 ms; E2E 13.495 ms.
+- Median of per-window P50 decode 5.067 ms (not global frame P50).
+- 3479 AU / 3479 outputs; all 3479 exact PTS matches, 0 unmatched/outstanding.
+- AU-to-output lag [0,1,2,3,4+]: [3479, 0, 0, 0, 0].
+- Errors/lost/skipped: 0. session_exit=0.
+- Final client SHA-256: `f5245883eac67bde2b894a6be8016732fd1aa2be10f38677e39ec4cd5ee2109a`.
+- Runtime SHA-256: `1576346afb0cab6465247706e6d886f09406ff785b64f5b91068305ba5e4b76f`.
+- Log SHA-256: `35c438f4f4b8927ac6ad773aa653a51b482929390416dfef38620db862d21314`.
+- The actual stream frame was clean and showed native-cedar / decode 5.0 ms.
+- A separate real KMS capture verified return to Spruce/PyUI; no Punktfunk
+  process, temporary test launcher, or queued principal command remained.
+- Device and pulled vendor library hashes matched; no system library was changed.
