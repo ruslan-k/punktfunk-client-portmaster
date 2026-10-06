@@ -7,7 +7,7 @@ import unittest
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 PATCHER = ROOT / "scripts/patch-cedar.py"
 
-# The six anchors live in the pinned upstream revision
+# The seven anchors live in the pinned upstream revision
 # (sources.env PUNKTFUNK_REF) and are asserted unique by the patcher itself.
 LIB_ANCHOR = '#[cfg(all(desktop, target_os = "linux"))]\npub mod video_vaapi_native;\n'
 ENUM_ANCHOR = '    NativeV4l2(Box<crate::video_v4l2::NativeV4l2Decoder>),\n'
@@ -20,6 +20,7 @@ LOGRUNG_ANCHOR = (
     '            Some(native_evidence(NativeRung::V4l2, wire)),\n'
     '        ),\n'
 )
+PACKED_ANCHOR = '    /// Take three already tight planes. Refuses a plane whose length is not\n'
 
 
 def fixture_tree(root: pathlib.Path) -> None:
@@ -32,7 +33,8 @@ def fixture_tree(root: pathlib.Path) -> None:
         + TRIED_ANCHOR + "mid2\n"
         + DECODE_ANCHOR + "mid3\n"
         + WHICH_ANCHOR + "mid4\n"
-        + LOGRUNG_ANCHOR + "suffix\n"
+        + LOGRUNG_ANCHOR + "mid5\n"
+        + PACKED_ANCHOR + "suffix\n"
     )
 
 
@@ -63,15 +65,16 @@ class CedarPatchTests(unittest.TestCase):
                 "Backend::NativeCedar(c) => (",
                 'Backend::NativeCedar(_) => "native Cedar",',
                 '("native-cedar", None),',
+                "pub(crate) fn from_packed_i420(",
             ]:
                 self.assertIn(marker, video)
             # The anchors are the pinned text still present exactly once each —
             # the patch extends them instead of rewriting them.
-            for anchor in [ENUM_ANCHOR, TRIED_ANCHOR, DECODE_ANCHOR, WHICH_ANCHOR, LOGRUNG_ANCHOR]:
+            for anchor in [ENUM_ANCHOR, TRIED_ANCHOR, DECODE_ANCHOR, WHICH_ANCHOR, LOGRUNG_ANCHOR, PACKED_ANCHOR]:
                 self.assertEqual(video.count(anchor), 1, anchor)
 
     def test_drift_on_any_anchor_fails_without_writing_anything(self):
-        anchors = [LIB_ANCHOR, ENUM_ANCHOR, TRIED_ANCHOR, DECODE_ANCHOR, WHICH_ANCHOR, LOGRUNG_ANCHOR]
+        anchors = [LIB_ANCHOR, ENUM_ANCHOR, TRIED_ANCHOR, DECODE_ANCHOR, WHICH_ANCHOR, LOGRUNG_ANCHOR, PACKED_ANCHOR]
         for anchor in anchors:
             with tempfile.TemporaryDirectory() as temp:
                 root = pathlib.Path(temp)
@@ -129,6 +132,15 @@ class CedarPatchTests(unittest.TestCase):
             "dlopen",
         ]:
             self.assertIn(marker, module)
+
+    def test_module_uses_one_final_i420_allocation(self):
+        module = (ROOT / "patches/video_cedar.rs").read_text()
+        self.assertIn("Vec::<u8>::with_capacity(total_len)", module)
+        self.assertIn("copy_plane_into(", module)
+        self.assertIn("CpuPlanarFrame::from_packed_i420(", module)
+        self.assertNotIn("CpuPlanarFrame::from_planes(", module)
+        self.assertNotIn("fn copy_plane(", module)
+        self.assertIn("stride == w", module)
 
     def test_module_feeds_stream_packages_like_the_vendor_demo(self):
         # Default still follows vdecoderDemo; diagnostic overrides are explicit.

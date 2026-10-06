@@ -1088,42 +1088,105 @@ impl NativeCedarDecoder {
                 "cedar: picture crop offsets in play");
         }
         let (cw, ch) = CpuPlanarFrame::chroma_dims(width, height);
-        let chroma_stride = stride / 2;
-        let (y, u, v) = match p.e_pixel_format {
-            PIXEL_FORMAT_YUV_PLANER_420 => (
-                copy_plane(p.p_data0, stride, left, top, width, height)?,
-                copy_plane(p.p_data1, chroma_stride, left / 2, top / 2, cw, ch)?,
-                copy_plane(p.p_data2, chroma_stride, left / 2, top / 2, cw, ch)?,
-            ),
-            PIXEL_FORMAT_YV12 => (
-                copy_plane(p.p_data0, stride, left, top, width, height)?,
-                copy_plane(p.p_data2, chroma_stride, left / 2, top / 2, cw, ch)?,
-                copy_plane(p.p_data1, chroma_stride, left / 2, top / 2, cw, ch)?,
-            ),
+        let y_len = (width as usize)
+            .checked_mul(height as usize)
+            .ok_or_else(|| anyhow!("cedar: luma size overflow"))?;
+        let c_len = (cw as usize)
+            .checked_mul(ch as usize)
+            .ok_or_else(|| anyhow!("cedar: chroma size overflow"))?;
+        let total_len = y_len
+            .checked_add(
+                c_len
+                    .checked_mul(2)
+                    .ok_or_else(|| anyhow!("cedar: I420 size overflow"))?,
+            )
+            .ok_or_else(|| anyhow!("cedar: I420 size overflow"))?;
+
+        // Allocate the final I420 payload once. Keep len=0 until every byte has
+        // been written, so an error cannot expose uninitialized storage.
+        let mut packed = Vec::<u8>::with_capacity(total_len);
+        let y_dst = packed.as_mut_ptr();
+        // SAFETY: the allocation has total_len capacity; these pointers stay
+        // within its three final I420 plane ranges and are only written below.
+        let (u_dst, v_dst) = unsafe { (y_dst.add(y_len), y_dst.add(y_len + c_len)) };
+
+        match p.e_pixel_format {
+            PIXEL_FORMAT_YUV_PLANER_420 => {
+                copy_plane_into(y_dst, p.p_data0, stride, left, top, width, height)?;
+                copy_plane_into(
+                    u_dst,
+                    p.p_data1,
+                    chroma_stride,
+                    left / 2,
+                    top / 2,
+                    cw,
+                    ch,
+                )?;
+                copy_plane_into(
+                    v_dst,
+                    p.p_data2,
+                    chroma_stride,
+                    left / 2,
+                    top / 2,
+                    cw,
+                    ch,
+                )?;
+            }
+            PIXEL_FORMAT_YV12 => {
+                copy_plane_into(y_dst, p.p_data0, stride, left, top, width, height)?;
+                copy_plane_into(
+                    u_dst,
+                    p.p_data2,
+                    chroma_stride,
+                    left / 2,
+                    top / 2,
+                    cw,
+                    ch,
+                )?;
+                copy_plane_into(
+                    v_dst,
+                    p.p_data1,
+                    chroma_stride,
+                    left / 2,
+                    top / 2,
+                    cw,
+                    ch,
+                )?;
+            }
             PIXEL_FORMAT_NV12 | PIXEL_FORMAT_NV21 => {
-                let y = copy_plane(p.p_data0, stride, left, top, width, height)?;
-                let uv_first_is_u = p.e_pixel_format == PIXEL_FORMAT_NV12;
-                let (u, v) = copy_interleaved_chroma(
+                copy_plane_into(y_dst, p.p_data0, stride, left, top, width, height)?;
+                copy_interleaved_chroma_into(
+                    u_dst,
+                    v_dst,
                     p.p_data1,
                     stride,
                     left / 2,
                     top / 2,
                     cw,
                     ch,
-                    uv_first_is_u,
+                    p.e_pixel_format == PIXEL_FORMAT_NV12,
                 )?;
-                (y, u, v)
             }
             other => bail!("cedar: output pixel format {other} is not a copyable 4:2:0 layout"),
-        };
+        }
+
+        // SAFETY: each supported branch above writes exactly y_len + 2*c_len
+        // bytes into the allocation before this point.
+        unsafe { packed.set_len(total_len) };
         if !self.format_logged {
             self.format_logged = true;
             tracing::info!(target: "cedar",
                 format = p.e_pixel_format, width, height, stride,
-                "cedar: first picture decoded (vendor format copied to packed I420)");
+                "cedar: first picture decoded (vendor format copied directly to packed I420)");
         }
-        let mut frame =
-            CpuPlanarFrame::from_planes(width, height, [y, u, v], source.color, source.facts.is_idr, DECODER_PIN)?;
+        let mut frame = CpuPlanarFrame::from_packed_i420(
+            width,
+            height,
+            packed,
+            source.color,
+            source.facts.is_idr,
+            DECODER_PIN,
+        )?;
         frame.recovery = source.facts.recovery;
         let stamp = source.stamp.map(|mut s| {
             s.ready_ns = punktfunk_core::quic::wall_clock_ns();
@@ -1188,32 +1251,50 @@ fn unsupported_shape(chroma_format_idc: u8, bit_depth_minus8: u8) -> Option<&'st
 /// Copy one visible plane row-by-row from the vendor buffer (stride-padded)
 /// into a tightly packed `Vec`. `None` base or a span shorter than the visible
 /// region refuses instead of reading whatever is there.
-fn copy_plane(
+fn copy_plane_into(
+    dst: *mut u8,
     base: *const c_char,
     stride: usize,
     left: usize,
     top: usize,
     width: u32,
     height: u32,
-) -> Result<Vec<u8>> {
+) -> Result<()> {
     ensure!(!base.is_null(), "cedar: picture plane pointer is NULL");
+    ensure!(!dst.is_null(), "cedar: picture destination pointer is NULL");
     let (w, h) = (width as usize, height as usize);
     ensure!(stride >= left + w, "cedar: plane stride {stride} < {left}+{w}");
-    let mut out = Vec::with_capacity(w * h);
-    for row in 0..h {
-        // SAFETY: the vendor contracts that each plane spans `stride` bytes
-        // per row from `base` for at least the visible height; row `top + row`
-        // and columns `left..left + w` are inside that span by the checks
-        // above.
-        let src = unsafe { std::slice::from_raw_parts(base.add((top + row) * stride + left).cast::<u8>(), w) };
-        out.extend_from_slice(src);
+
+    if left == 0 && top == 0 && stride == w {
+        // The common TSPS 720p path is tightly packed: one memcpy instead of
+        // 720 row copies and no temporary Vec.
+        // SAFETY: the vendor owns at least w*h readable bytes for this plane,
+        // and dst owns exactly that many writable bytes in the final I420 Vec.
+        unsafe {
+            std::ptr::copy_nonoverlapping(base.cast::<u8>(), dst, w * h);
+        }
+        return Ok(());
     }
-    Ok(out)
+
+    for row in 0..h {
+        // SAFETY: the vendor contracts stride bytes per row; the geometry check
+        // above keeps left..left+w inside each row, while dst spans w*h bytes.
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                base.add((top + row) * stride + left).cast::<u8>(),
+                dst.add(row * w),
+                w,
+            );
+        }
+    }
+    Ok(())
 }
 
-/// Split one interleaved 4:2:0 chroma plane (`NV12` = U first, `NV21` = V
-/// first) into two tightly packed planes.
-fn copy_interleaved_chroma(
+/// Split one interleaved 4:2:0 chroma plane (NV12 = U first, NV21 = V first)
+/// directly into the final packed I420 chroma ranges.
+fn copy_interleaved_chroma_into(
+    u_dst: *mut u8,
+    v_dst: *mut u8,
     base: *const c_char,
     stride: usize,
     left: usize,
@@ -1221,30 +1302,35 @@ fn copy_interleaved_chroma(
     width: u32,
     height: u32,
     uv_first_is_u: bool,
-) -> Result<(Vec<u8>, Vec<u8>)> {
+) -> Result<()> {
     ensure!(!base.is_null(), "cedar: interleaved chroma pointer is NULL");
+    ensure!(!u_dst.is_null() && !v_dst.is_null(), "cedar: chroma destination pointer is NULL");
     let (w, h) = (width as usize, height as usize);
     let span = left + 2 * w;
     ensure!(stride >= span, "cedar: chroma stride {stride} < {span}");
-    let mut u = Vec::with_capacity(w * h);
-    let mut v = Vec::with_capacity(w * h);
+
     for row in 0..h {
-        // SAFETY: as `copy_plane`, with the interleaved pair width: the vendor
-        // contracts `stride` bytes per row and the row range spans
-        // `left..left + 2*w` inside it.
-        let src = unsafe { std::slice::from_raw_parts(base.add((top + row) * stride + left).cast::<u8>(), 2 * w) };
-        for pair in src.chunks_exact(2) {
-            let (first, second) = (pair[0], pair[1]);
-            if uv_first_is_u {
-                u.push(first);
-                v.push(second);
-            } else {
-                v.push(first);
-                u.push(second);
+        // SAFETY: the vendor contracts stride bytes per row and span was
+        // checked above; both output planes own w*h bytes.
+        let src = unsafe { base.add((top + row) * stride + left).cast::<u8>() };
+        let out = row * w;
+        if uv_first_is_u {
+            for col in 0..w {
+                unsafe {
+                    *u_dst.add(out + col) = *src.add(2 * col);
+                    *v_dst.add(out + col) = *src.add(2 * col + 1);
+                }
+            }
+        } else {
+            for col in 0..w {
+                unsafe {
+                    *v_dst.add(out + col) = *src.add(2 * col);
+                    *u_dst.add(out + col) = *src.add(2 * col + 1);
+                }
             }
         }
     }
-    Ok((u, v))
+    Ok(())
 }
 
 #[cfg(test)]

@@ -2,7 +2,7 @@
 """Wire the native-cedar decoder rung into the pinned Punktfunk source.
 
 Installs `patches/video_cedar.rs` next to the other pf-client-core sources and
-applies six surgical edits (one in `lib.rs`, five in `video.rs`). Each edit's
+applies seven surgical edits (one in `lib.rs`, six in `video.rs`). Each edit's
 anchor must occur exactly once in the pinned revision; a mismatch fails before
 anything is written, so a half-patched tree cannot reach the compiler.
 
@@ -83,9 +83,55 @@ LOGRUNG_NEW = LOGRUNG_OLD + (
     '        Backend::NativeCedar(_) => ("native-cedar", None),\n'
 )
 
+
+PACKED_OLD = "    /// Take three already tight planes. Refuses a plane whose length is not\n"
+PACKED_NEW = (
+    "    /// Take one already-packed I420 allocation without re-copying chroma.\n"
+    "    /// Native hardware rungs use this after writing the vendor planes directly\n"
+    "    /// into their final CPU payload.\n"
+    "    #[cfg(target_os = \"linux\")]\n"
+    "    pub(crate) fn from_packed_i420(\n"
+    "        width: u32,\n"
+    "        height: u32,\n"
+    "        data: Vec<u8>,\n"
+    "        color: ColorDesc,\n"
+    "        keyframe: bool,\n"
+    "        path: &'static str,\n"
+    "    ) -> Result<CpuPlanarFrame> {\n"
+    "        anyhow::ensure!(width > 0 && height > 0, \"empty picture {width}x{height}\");\n"
+    "        let (cw, ch) = Self::chroma_dims(width, height);\n"
+    "        let y = (width as usize)\n"
+    "            .checked_mul(height as usize)\n"
+    "            .ok_or_else(|| anyhow::anyhow!(\"I420 luma size overflow\"))?;\n"
+    "        let c = (cw as usize)\n"
+    "            .checked_mul(ch as usize)\n"
+    "            .ok_or_else(|| anyhow::anyhow!(\"I420 chroma size overflow\"))?;\n"
+    "        let total = y\n"
+    "            .checked_add(c.checked_mul(2).ok_or_else(|| anyhow::anyhow!(\"I420 size overflow\"))?)\n"
+    "            .ok_or_else(|| anyhow::anyhow!(\"I420 size overflow\"))?;\n"
+    "        anyhow::ensure!(\n"
+    "            data.len() == total,\n"
+    "            \"packed I420 payload: {} bytes for expected {total}\",\n"
+    "            data.len()\n"
+    "        );\n"
+    "        Ok(CpuPlanarFrame {\n"
+    "            width,\n"
+    "            height,\n"
+    "            data,\n"
+    "            offsets: [0, y, y + c],\n"
+    "            color,\n"
+    "            keyframe,\n"
+    "            recovery: punktfunk_core::reanchor::LocalRecovery::NONE,\n"
+    "            path,\n"
+    "        })\n"
+    "    }\n"
+    "\n"
+) + PACKED_OLD
+
 EDITS = [
     ("lib.rs module declaration", LIB_OLD, LIB_NEW),
     ("Backend enum arm", ENUM_OLD, ENUM_NEW),
+    ("packed I420 constructor", PACKED_OLD, PACKED_NEW),
     ("Decoder::new pin block", TRIED_OLD, TRIED_NEW),
     ("decode dispatch arm", DECODE_OLD, DECODE_NEW),
     ("demotion log arm", WHICH_OLD, WHICH_NEW),
@@ -126,7 +172,7 @@ def main() -> None:
     shutil.copyfile(module_src, src / "video_cedar.rs")
     for path, text in writes.items():
         path.write_text(text, encoding="utf-8")
-    print("cedar patch: video_cedar.rs installed, 6 upstream edits applied")
+    print("cedar patch: video_cedar.rs installed, 7 upstream edits applied")
 
 
 if __name__ == "__main__":
