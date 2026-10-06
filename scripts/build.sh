@@ -105,6 +105,9 @@ shutil.copyfile(
 print("installed ALSA playback backend and embedded pad-audio stub")
 PY
 
+echo "==> allow TSPS QUIC GSO fallback in presence and wake probes"
+python3 "$ROOT/scripts/patch-probe-budget.py" "$SRC/punktfunk"
+
 echo "==> cross-build Punktfunk CLI + gamepad console session"
 export PATH="/root/.cargo/bin:$PATH"
 export CARGO_TARGET_DIR="$TARGET_DIR"
