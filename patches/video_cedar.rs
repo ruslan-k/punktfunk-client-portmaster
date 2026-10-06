@@ -45,6 +45,8 @@ mod tuning;
 use tuning::CedarTuning;
 #[path = "cedar_async.rs"]
 mod async_parser;
+#[path = "cedar_low_delay.rs"]
+mod low_delay;
 
 use anyhow::anyhow;
 use anyhow::bail;
@@ -192,10 +194,12 @@ struct VideoConfig {
     b_set_proc_info_enable: c_int,
     n_set_proc_info_freq: c_int,
     n_channel_num: c_int,
-    /// Opaque tail: the device's VConfig is 216 bytes; the fields past
-    /// `n_channel_num` are not transcribed (never touched here). This pad
-    /// makes `size_of` match the device so the tests can pin it.
-    _tail: [u8; 32],
+    /// The device copies 216 bytes. Apart from the guarded output-gate word
+    /// at +192, the SDK-unknown tail remains zeroed and untouched.
+    _tail_before_common_flags: [u8; 8],
+    /// Observed libawh264 output-hold gate; SDK name unknown. Version guarded.
+    common_config_flags_192: c_uint,
+    _tail: [u8; 20],
 }
 
 /// Zeroed tail for the device's `memcpy(p->vconfig, pVconfig, sizeof(VConfig))`:
@@ -491,6 +495,8 @@ pub(crate) struct NativeCedarDecoder {
     drop_b_delay: c_int,
     poll_budget_us: u64,
     append_aud: bool,
+    low_delay: bool,
+    zero_reorder_verified: bool,
     output_lag_frames: [u64; 5],
     pts_probe: bool,
     pts_ledger: PtsLedger<SubmittedPicture>,
@@ -570,6 +576,8 @@ impl NativeCedarDecoder {
             drop_b_delay: 0,
             poll_budget_us: 0,
             append_aud: false,
+            low_delay: false,
+            zero_reorder_verified: false,
             output_lag_frames: [0; 5],
             pts_probe: std::env::var("PUNKTFUNK_CEDAR_PTS_PROBE").as_deref() == Ok("1"),
             pts_ledger: PtsLedger::default(),
@@ -701,6 +709,16 @@ impl NativeCedarDecoder {
                     }
                     .into());
                 }
+                let safe = low_delay::safe_stream(plan.sps.pic_order_cnt_type,
+                    plan.sps.frame_mbs_only_flag,
+                    plan.slices.iter().any(|slice| slice.header.slice_type.is_b()));
+                if self.pending_dims.is_none() {
+                    tracing::info!(target: "cedar", poc_type = plan.sps.pic_order_cnt_type,
+                        progressive = plan.sps.frame_mbs_only_flag, zero_reorder_verified = safe,
+                        "cedar-stream-order");
+                }
+                if self.low_delay && !safe { bail!("cedar: low-delay candidate refuses a reordered or interlaced AU"); }
+                self.zero_reorder_verified = safe;
                 self.pending_dims = Some((plan.picture.coded_width, plan.picture.coded_height));
                 let c = plan.picture.colour;
                 let mark = self.recovery.note_h264(
@@ -723,6 +741,7 @@ impl NativeCedarDecoder {
                 })
             }
             Err(e) => {
+                if self.low_delay { bail!("cedar: low-delay candidate cannot validate AU: {e}"); }
                 if !matches!(e, PlanError::NoActiveParamSet { .. }) && !self.plan_warned {
                     self.plan_warned = true;
                     tracing::warn!(target: "cedar", error = %e,
@@ -745,6 +764,13 @@ impl NativeCedarDecoder {
         self.drop_b_delay = tune.drop_b_delay;
         self.poll_budget_us = tune.poll_budget_us as u64;
         self.append_aud = tune.append_aud == 1;
+        if tune.low_delay == 1 {
+            if !self.zero_reorder_verified { bail!("cedar: low-delay needs progressive H.264 POC type 2 without B slices"); }
+            let vendor = std::fs::read("/usr/lib/libawh264.so")
+                .context("cedar: read vendor implementation for low-delay guard")?;
+            if !low_delay::supports_vendor(&vendor) { bail!("cedar: low-delay vendor instruction signature mismatch"); }
+            self.low_delay = true;
+        }
         // SAFETY: plain-data structs of integers and pointers; an all-zero
         // value is the vendor header's own "unset" state.
         let mut info: VideoStreamInfo = unsafe { std::mem::zeroed() };
@@ -766,12 +792,13 @@ impl NativeCedarDecoder {
         // three holding counts. Everything else stays zeroed -- every extra
         // knob (frame-buffer count, SBM malloc mode, palloc-before-decode)
         // is unvalidated on this lib and the demo runs without them.
+        if self.low_delay { storage.config.common_config_flags_192 = 1; }
         storage.config.e_output_pixel_format = PIXEL_FORMAT_YUV_PLANER_420;
         storage.config.n_de_interlace_holding_frame_buffer_num = 2;
         storage.config.b_no_b_frames = tune.no_b_frames;
         storage.config.n_display_holding_frame_buffer_num = tune.display;
         storage.config.n_decode_smooth_frame_buffer_num = tune.smooth;
-        tracing::info!(target: "cedar", no_b_frames = tune.no_b_frames,
+        tracing::info!(target: "cedar", low_delay = self.low_delay, no_b_frames = tune.no_b_frames,
             frame_package = tune.frame_package, smooth = tune.smooth, display = tune.display,
             drop_b_delay = tune.drop_b_delay, immediate_handoff = self.immediate_handoff,
             poll_us = tune.poll_budget_us, append_aud = self.append_aud,
@@ -1244,6 +1271,7 @@ mod tests {
         assert_eq!(offset_of!(VideoStreamInfo, b_is_frame_package), 48);
 
         assert_eq!(size_of::<VideoConfig>(), 216);
+        assert_eq!(offset_of!(VideoConfig, common_config_flags_192), 192);
         assert_eq!(offset_of!(VideoConfig, e_output_pixel_format), 36);
         assert_eq!(offset_of!(VideoConfig, b_no_b_frames), 44);
         assert_eq!(offset_of!(VideoConfig, n_frame_buffer_num), 64);
