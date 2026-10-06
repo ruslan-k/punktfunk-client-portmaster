@@ -147,6 +147,27 @@ GUARD_NEW = (
     "}\n"
 )
 
+# The rung has no local parser for the reference chain (`LocalRecovery` carries only
+# SEI flags), so it must report silence, not refutation. The CPU arm already answers
+# `Unavailable`; a dma-buf frame from this rung has to give the same answer, or the
+# reanchor gate reads `references_clean: false` as a damaged chain and withholds
+# every anchor - frames decode and nothing is presented.
+ANCHOR_OLD = (
+    "            #[cfg(target_os = \"linux\")]\n"
+    "            DecodedImage::NativeDmabuf(f) => f.references_clean,\n"
+)
+ANCHOR_NEW = (
+    "            #[cfg(target_os = \"linux\")]\n"
+    "            DecodedImage::NativeDmabuf(f) => {\n"
+    "                // This rung cannot corroborate the chain: report silence\n"
+    "                // (the CPU arm's answer), never a damaged chain.\n"
+    "                if f.path == crate::video_cedar::DECODER_PIN {\n"
+    "                    return AnchorEvidence::Unavailable;\n"
+    "                }\n"
+    "                f.references_clean\n"
+    "            }\n"
+)
+
 EDITS = [
     ("lib.rs module declaration", LIB_OLD, LIB_NEW),
     ("Backend enum arm", ENUM_OLD, ENUM_NEW),
@@ -156,6 +177,7 @@ EDITS = [
     ("demotion log arm", WHICH_OLD, WHICH_NEW),
     ("log_rung arm", LOGRUNG_OLD, LOGRUNG_NEW),
     ("FrameGuard enum arm", GUARD_OLD, GUARD_NEW),
+    ("anchor evidence for this rung", ANCHOR_OLD, ANCHOR_NEW),
 ]
 
 

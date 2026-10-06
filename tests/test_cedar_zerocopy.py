@@ -69,6 +69,25 @@ class PresenterPlanarImport(unittest.TestCase):
                        '("FrameGuard enum arm", GUARD_OLD, GUARD_NEW)']:
             self.assertIn(marker, patcher)
 
+    def test_a_zero_copy_frame_reports_silence_not_a_damaged_chain(self):
+        """`references_clean: false` on a dmabuf frame is EVIDENCE, not silence.
+
+        `anchor_evidence()` maps a dma-buf frame's `references_clean` to
+        `ReferencesClean`/`ReferencesDamaged`, and the reanchor gate withholds the
+        anchor on `ReferencesDamaged`. This rung has no local parser for the
+        reference chain (`LocalRecovery` carries only SEI flags), so a zero-copy
+        frame must answer `Unavailable` like the CPU arm does - otherwise frames
+        decode and nothing is ever presented. Measured on device: 3900 frames
+        decoded, screen still on the connection page, no errors logged.
+        """
+        patcher = (ROOT / 'scripts/patch-cedar.py').read_text()
+        self.assertIn('ANCHOR_OLD', patcher)
+        self.assertIn('crate::video_cedar::DECODER_PIN', patcher)
+        self.assertIn('return AnchorEvidence::Unavailable;', patcher)
+        self.assertIn('("anchor evidence for this rung", ANCHOR_OLD, ANCHOR_NEW)', patcher)
+        module = (ROOT / 'patches/video_cedar.rs').read_text()
+        self.assertIn('a damaged\n                // chain makes the reanchor gate withhold every anchor.', module)
+
     def test_the_build_applies_the_presenter_patch(self):
         self.assertIn('patch-presenter-planar.py', (ROOT / 'scripts/build.sh').read_text())
 

@@ -1402,10 +1402,11 @@ impl NativeCedarDecoder {
                 ],
                 color: source.color,
                 keyframe: source.facts.is_idr,
-                // The vendor hands the picture over complete, but this rung's
-                // intra-refresh mark lives on `CpuPlanarFrame::recovery` and a
-                // dmabuf frame has no such field. Reporting no evidence is the
-                // honest answer; a zero-copy frame does not claim recovery.
+                // This rung has no local parser for the reference chain, so it
+                // cannot corroborate it: `patch-cedar.py` makes a dma-buf frame
+                // from this rung answer `AnchorEvidence::Unavailable` (the same
+                // silence the CPU arm gives), and never "damaged" - a damaged
+                // chain makes the reanchor gate withhold every anchor.
                 references_clean: false,
                 sync_fds: Vec::new(),
                 pool_key: (self.pool_generation << 32) | u64::from(fd as u32),
