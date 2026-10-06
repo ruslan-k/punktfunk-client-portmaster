@@ -40,6 +40,9 @@ use phases::{PhaseStats, elapsed_us, queue_picture};
 mod pts;
 use pts::{PtsLedger, TokenClock};
 pub(crate) use pts::FrameStamp;
+#[path = "cedar_tuning.rs"]
+mod tuning;
+use tuning::CedarTuning;
 
 use anyhow::anyhow;
 use anyhow::bail;
@@ -483,6 +486,7 @@ pub(crate) struct NativeCedarDecoder {
     profile: Option<PhaseStats>,
     output_fifo: bool,
     immediate_handoff: bool,
+    drop_b_delay: c_int,
     output_lag_frames: [u64; 5],
     pts_probe: bool,
     pts_ledger: PtsLedger<SubmittedPicture>,
@@ -556,7 +560,10 @@ impl NativeCedarDecoder {
             // Device A/B proved newest-wins discarded half the pictures.
             // Default FIFO; explicit 0 retains the old control for diagnostics.
             output_fifo: std::env::var("PUNKTFUNK_CEDAR_FIFO").as_deref() != Ok("0"),
-            immediate_handoff: std::env::var("PUNKTFUNK_CEDAR_HANDOFF").as_deref() != Ok("0"),
+            // Burst delivery alone halves presentation on newest-wins consumers.
+            // Keep opt-in until the vendor's output cadence is one picture per AU.
+            immediate_handoff: std::env::var("PUNKTFUNK_CEDAR_HANDOFF").as_deref() == Ok("1"),
+            drop_b_delay: 0,
             output_lag_frames: [0; 5],
             pts_probe: std::env::var("PUNKTFUNK_CEDAR_PTS_PROBE").as_deref() == Ok("1"),
             pts_ledger: PtsLedger::default(),
@@ -727,6 +734,8 @@ impl NativeCedarDecoder {
     /// (raw Annex-B, matching the vendor demo), vendor-default frame-buffer
     /// count, smooth/display holding of 2, no non-demo knobs.
     fn initialize(&mut self, width: u32, height: u32) -> Result<()> {
+        let tune = CedarTuning::from_lookup(|k| std::env::var(k).ok()).map_err(|e| anyhow!(e))?;
+        self.drop_b_delay = tune.drop_b_delay;
         // SAFETY: plain-data structs of integers and pointers; an all-zero
         // value is the vendor header's own "unset" state.
         let mut info: VideoStreamInfo = unsafe { std::mem::zeroed() };
@@ -735,11 +744,10 @@ impl NativeCedarDecoder {
         info.n_height = height as c_int;
         info.n_frame_rate = 30;
         info.n_frame_duration = 33_333;
-        // Stream packages, not frame packages: the A523 libvdecoder did not
-        // decode anything from a frame-package feed (631 AUs, 0 frames, SBM
-        // full), and every vendor consumer of raw Annex-B on this platform --
-        // vdecoderDemo included -- leaves this flag unset (0).
-        info.b_is_frame_package = 0;
+        // Default Annex-B SBM parsing is the validated baseline. The earlier
+        // negative frame-package test preceded the ABI repair; retest only by
+        // explicit one-axis candidate override on this now-correct layout.
+        info.b_is_frame_package = tune.frame_package;
 
         // SAFETY: as above; the tail keeps the vendor's `sizeof(VConfig)`
         // memcpy inside this allocation.
@@ -751,8 +759,13 @@ impl NativeCedarDecoder {
         // is unvalidated on this lib and the demo runs without them.
         storage.config.e_output_pixel_format = PIXEL_FORMAT_YUV_PLANER_420;
         storage.config.n_de_interlace_holding_frame_buffer_num = 2;
-        storage.config.n_display_holding_frame_buffer_num = 2;
-        storage.config.n_decode_smooth_frame_buffer_num = 2;
+        storage.config.b_no_b_frames = tune.no_b_frames;
+        storage.config.n_display_holding_frame_buffer_num = tune.display;
+        storage.config.n_decode_smooth_frame_buffer_num = tune.smooth;
+        tracing::info!(target: "cedar", no_b_frames = tune.no_b_frames,
+            frame_package = tune.frame_package, smooth = tune.smooth, display = tune.display,
+            drop_b_delay = tune.drop_b_delay, immediate_handoff = self.immediate_handoff,
+            "cedar: candidate configuration (one-axis A/B controls)");
 
         // SAFETY: `handle` is live; `info` and `storage` are live locals the
         // call only reads (and rewrites `storage.config.memops` through, as
@@ -878,7 +891,7 @@ impl NativeCedarDecoder {
             // SAFETY: `handle` is live; the flags are the live-stream contract
             // (not end-of-stream, any picture, B-frames not expected on the
             // wire) and the clock is this decoder's monotonic microsecond time.
-            let rc = unsafe { (self.libs.decode)(self.handle, 0, 0, 0, self.now_us()) };
+            let rc = unsafe { (self.libs.decode)(self.handle, 0, 0, self.drop_b_delay, self.now_us()) };
             if let Some(profile) = self.profile.as_mut() {
                 profile.note_vendor(rc, elapsed_us(begin));
             }
@@ -1172,6 +1185,7 @@ mod tests {
 
         assert_eq!(size_of::<VideoConfig>(), 216);
         assert_eq!(offset_of!(VideoConfig, e_output_pixel_format), 36);
+        assert_eq!(offset_of!(VideoConfig, b_no_b_frames), 44);
         assert_eq!(offset_of!(VideoConfig, n_frame_buffer_num), 64);
         assert_eq!(offset_of!(VideoConfig, n_align_stride), 88);
         assert_eq!(offset_of!(VideoConfig, b_is_soft_decoder_flag), 92);

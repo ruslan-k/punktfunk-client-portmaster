@@ -39,7 +39,11 @@ def main():
     pts_helper = port / 'patches/cedar_pts.rs'
     if not pts_helper.is_file():
         raise SystemExit('cedar phases: missing PTS helper; no writes')
+    tuning_helper = port / 'patches/cedar_tuning.rs'
+    if not tuning_helper.is_file():
+        raise SystemExit('cedar phases: missing candidate helper; no writes')
     text = text.replace(START, START_NEW).replace(DECODE, DECODE_NEW)
+    shutil.copyfile(tuning_helper, src / 'cedar_tuning.rs')
     shutil.copyfile(pts_helper, src / 'cedar_pts.rs')
     shutil.copyfile(helper, src / 'cedar_phases.rs')
     path.write_text(text)

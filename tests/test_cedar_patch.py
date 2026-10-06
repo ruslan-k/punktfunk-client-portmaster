@@ -131,11 +131,12 @@ class CedarPatchTests(unittest.TestCase):
             self.assertIn(marker, module)
 
     def test_module_feeds_stream_packages_like_the_vendor_demo(self):
-        # The A523 libvdecoder produced zero frames (SBM filled up) from a
-        # frame-package feed; the device's own vdecoderDemo leaves
-        # bIsFramePackage unset for raw Annex-B, so the rung must too.
+        # Default still follows vdecoderDemo; diagnostic overrides are explicit.
+        # Earlier negative frame-package evidence predated the corrected ABI.
         module = (ROOT / "patches/video_cedar.rs").read_text()
-        self.assertIn("info.b_is_frame_package = 0;", module)
+        self.assertIn("info.b_is_frame_package = tune.frame_package;", module)
+        tuning = (ROOT / "patches/cedar_tuning.rs").read_text()
+        self.assertIn('get("PUNKTFUNK_CEDAR_FRAME_PACKAGE"),0,0,1', tuning)
         self.assertNotIn("info.b_is_frame_package = 1;", module)
 
 
