@@ -9,7 +9,7 @@ VIDEO_EDITS=[('    /// Feed one access unit (hosts are one-in/one-out). Hardware
     pub(crate) fn poll_cedar_ready(&mut self) -> Option<DecodedImage> {
         #[cfg(target_os = "linux")]
         if let Backend::NativeCedar(c) = &mut self.backend {
-            return c.poll_ready().map(DecodedImage::Cpu);
+            return c.poll_ready();
         }
         None
     }

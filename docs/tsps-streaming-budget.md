@@ -335,6 +335,34 @@ the clock (about 1.3 us per call on this device). Nothing in the loop's visible 
 explains it, so it stays open: claiming a fix here would be a guess.
 
 
+### Zero-copy: the client half, and what it costs
+
+`PUNKTFUNK_CEDAR_ZEROCOPY=1` makes the rung hand the presenter the vendor's own
+dma-buf instead of a CPU copy: `hold_picture` builds a `DmabufFrame` from
+`n_buf_fd` plus the YV12 offsets the DMA-BUF probe already proved byte-for-byte
+(Y at 0, V at `luma_len`, U at `luma_len + chroma_len`, so the plane list carries
+Y, Cb, Cr in the order the planar CSC binds), and it does NOT call `ReturnPicture`.
+The picture stays held until the presenter's fence, because the vendor would
+otherwise write over a surface the GPU is still sampling.
+
+Releases come back over a channel and are drained on the decoder thread before
+every vendor call (`drain_releases`), since the vendor stack is single-threaded.
+Held pictures occupy slots in a finite vendor pool, so the drain has to keep up:
+`held`/`held_peak`/`released` are logged for exactly that check.
+
+Two honest limits, both unmeasured on device so far:
+
+* **The intra-refresh mark is lost.** This rung derives `LocalRecovery` and the
+  copy path carries it on `CpuPlanarFrame::recovery`. `DmabufFrame` has no such
+  field, so a zero-copy frame reports `references_clean: false` - no evidence,
+  rather than a guessed one. Carrying it properly means adding a field to
+  `DmabufFrame` and updating the VAAPI/V4L2 constructors.
+* **Pool starvation is untested.** If the presenter lags, `RequestPicture` can
+  return null while releases are still in flight; the rung treats that as "no
+  picture" and the retry budget bounds the drain.
+
+Default off: the copy path is unchanged unless the knob is set.
+
 ### Zero-copy: the shape the presenter change must have
 
 The presenter already owns everything the colour path needs - `CscPass::new_planar`

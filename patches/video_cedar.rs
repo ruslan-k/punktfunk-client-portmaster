@@ -61,7 +61,15 @@ use pf_bitstream::h264::H264Planner;
 use pf_bitstream::h264::PlanError;
 use pf_vkdecode::RecoveryWatch;
 
-use crate::video::CpuPlanarFrame;
+use crate::video::{
+    CpuPlanarFrame, DmabufFrame, DmabufPlane, DecodedImage, DrmFrameGuard, FrameGuard,
+};
+
+/// fourcc('Y','U','1','2'): the three planes are handed to the presenter as
+/// single-component images in Y, Cb, Cr order.
+const DRM_FORMAT_YUV420: u32 = 0x3231_5559;
+/// The vendor's exported picture is linear; the DMA-BUF probe proved it byte for byte.
+const DRM_FORMAT_MOD_LINEAR: u64 = 0;
 use crate::video::StreamFormat;
 use crate::video_color::ColorDesc;
 use crate::video_software::NoSoftwareRung;
@@ -457,6 +465,8 @@ impl CedarFrameGuard {
         Self { token, release }
     }
 
+    /// The held picture this guard releases. Read by the guard's own tests and by
+    /// the decoder's diagnostics; the release path itself only carries it.
     pub(crate) fn token(&self) -> u64 {
         self.token
     }
@@ -468,6 +478,9 @@ impl Drop for CedarFrameGuard {
         let _ = self.release.send(self.token);
     }
 }
+
+/// One per decoder instance, so a presenter never reuses an import across sessions.
+static POOL_GENERATIONS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// How one vendor result moves the drain loop.
 enum DrainStep {
@@ -503,7 +516,7 @@ struct SubmittedPicture {
     color: ColorDesc,
 }
 struct CedarOutput {
-    frame: CpuPlanarFrame,
+    frame: DecodedImage,
     stamp: Option<FrameStamp>,
 }
 
@@ -564,6 +577,19 @@ pub(crate) struct NativeCedarDecoder {
     last_plan_truth: Option<PlanTruth>,
     /// Start of the current drain's retry budget; `None` when polling is off.
     async_start: Option<Instant>,
+    /// Hand the presenter the vendor's dma-buf instead of a CPU copy.
+    zerocopy: bool,
+    /// Pictures held for the presenter, keyed by the token its guard carries.
+    held: std::collections::HashMap<u64, *mut VideoPicture>,
+    /// Guards send their token here when the presenter drops them.
+    release_tx: std::sync::mpsc::Sender<u64>,
+    release_rx: std::sync::mpsc::Receiver<u64>,
+    next_token: u64,
+    /// Distinguishes this decoder's pool from a previous session's, so the
+    /// presenter never reuses an import for a surface that is gone.
+    pool_generation: u64,
+    held_peak: usize,
+    released: u64,
     output_lag_frames: [u64; 5],
     pts_probe: bool,
     pts_ledger: PtsLedger<SubmittedPicture>,
@@ -608,6 +634,11 @@ impl NativeCedarDecoder {
             bail!("cedar: CreateVideoDecoder returned NULL");
         }
         tracing::info!(target: "cedar", "cedar: decoder context created (H.264, initialize deferred to the first SPS)");
+        // Presenter-dropped pictures come back through this channel; the vendor
+        // call itself stays on this thread.
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let pool_generation =
+            POOL_GENERATIONS.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
         Ok(NativeCedarDecoder {
             libs,
             handle,
@@ -668,6 +699,14 @@ impl NativeCedarDecoder {
             pts_matches: 0,
             pts_unmatched: 0,
             start: Instant::now(),
+            zerocopy: std::env::var("PUNKTFUNK_CEDAR_ZEROCOPY").as_deref() == Ok("1"),
+            held: std::collections::HashMap::new(),
+            release_tx: release_tx.clone(),
+            release_rx,
+            next_token: 1,
+            pool_generation,
+            held_peak: 0,
+            released: 0,
         })
     }
 
@@ -686,7 +725,7 @@ impl NativeCedarDecoder {
     }
 
     /// Already copied pictures only: no AU feed, vendor call, wait, or metadata guess.
-    pub(crate) fn poll_ready(&mut self) -> Option<CpuPlanarFrame> {
+    pub(crate) fn poll_ready(&mut self) -> Option<DecodedImage> {
         if !self.immediate_handoff { return None; }
         let output = phases::poll_picture(&mut self.pending)?;
         self.frames_out += 1;
@@ -694,7 +733,7 @@ impl NativeCedarDecoder {
         Some(output.frame)
     }
 
-    pub(crate) fn decode(&mut self, au: &[u8]) -> Result<Option<CpuPlanarFrame>> {
+    pub(crate) fn decode(&mut self, au: &[u8]) -> Result<Option<DecodedImage>> {
         self.output_stamp = None;
         let begin = self.profile.as_ref().map(|_| Instant::now());
         let result = self.decode_inner(au);
@@ -714,7 +753,10 @@ impl NativeCedarDecoder {
         result
     }
 
-    fn decode_inner(&mut self, au: &[u8]) -> Result<Option<CpuPlanarFrame>> {
+    fn decode_inner(&mut self, au: &[u8]) -> Result<Option<DecodedImage>> {
+        // Frames the presenter finished with come back here: the vendor stack is
+        // single-threaded, so only this thread may return a picture to it.
+        self.drain_releases();
         self.aus += 1;
         let begin = self.profile.as_ref().map(|_| Instant::now());
         let facts = self.plan_facts(au)?;
@@ -1236,6 +1278,19 @@ impl NativeCedarDecoder {
         if pic.is_null() {
             return Ok(None);
         }
+        if self.zerocopy {
+            match self.hold_picture(pic) {
+                Ok(Some(output)) => return Ok(Some(output)),
+                // No usable export: fall through to the copy path, which returns
+                // the picture itself.
+                Ok(None) => {}
+                Err(e) => {
+                    // SAFETY: the picture was handed over above and is still ours.
+                    let _ = unsafe { (self.libs.return_picture)(self.handle, pic) };
+                    return Err(e);
+                }
+            }
+        }
         let begin = self.profile.as_ref().map(|_| Instant::now());
         let copied = self.copy_picture(pic);
         if let Some(profile) = self.profile.as_mut() {
@@ -1254,6 +1309,114 @@ impl NativeCedarDecoder {
                 "cedar: ReturnPicture refused a picture from this FBM");
         }
         copied.map(Some)
+    }
+
+    /// Return every picture the presenter has finished with. Decoder thread only,
+    /// and before any vendor call, so a held pool refills promptly.
+    fn drain_releases(&mut self) {
+        while let Ok(token) = self.release_rx.try_recv() {
+            let Some(pic) = self.held.remove(&token) else {
+                continue;
+            };
+            // SAFETY: `pic` came from RequestPicture on this thread and has not been
+            // returned yet; `token` is unique per held picture, so this runs once.
+            let rc = unsafe { (self.libs.return_picture)(self.handle, pic) };
+            if rc != 0 {
+                tracing::warn!(target: "cedar", rc,
+                    "cedar-zerocopy: ReturnPicture refused a released picture");
+            }
+            self.released += 1;
+            if self.released.is_multiple_of(120) {
+                tracing::debug!(target: "cedar", released = self.released,
+                    peak_held = self.held_peak, still_held = self.held.len(),
+                    "cedar-zerocopy: pictures returned to the vendor");
+            }
+        }
+    }
+
+    /// Hand the presenter the vendor's own dma-buf and keep the picture until its
+    /// guard comes back. `None` when the picture has no usable export, and the
+    /// caller then falls back to the copy path.
+    ///
+    /// The picture is NOT returned here: the presenter samples it until its fence
+    /// signals, and the vendor would otherwise write over it. A held picture
+    /// occupies a slot in the vendor's finite pool, which is why releases are
+    /// drained before every vendor call.
+    fn hold_picture(&mut self, pic: *mut VideoPicture) -> Result<Option<CedarOutput>> {
+        // SAFETY: `pic` is the live picture RequestPicture handed over on this
+        // thread; it stays valid until ReturnPicture, which this path defers.
+        let p = unsafe { &*pic };
+        if p.n_buf_fd < 0 {
+            return Ok(None);
+        }
+        let width = p.n_width.max(0) as u32;
+        let height = p.n_height.max(0) as u32;
+        if width == 0 || height == 0 {
+            return Ok(None);
+        }
+        let stride = p.n_line_stride.max(width as c_int) as u32;
+        let chroma_stride = stride / 2;
+        // YV12 in the export: Y at 0, V at `v_off`, U at `u_off`. The presenter
+        // binds Y, Cb, Cr, so the plane list carries U before V.
+        let Some((_y_off, v_off, u_off)) = cedar_dmabuf::yv12_offsets(width, height) else {
+            return Ok(None);
+        };
+        let Some(source) = self.pts_ledger.take(p.n_pts) else {
+            return Ok(None);
+        };
+        let token = self.next_token;
+        self.next_token += 1;
+        self.held.insert(token, pic);
+        self.held_peak = self.held_peak.max(self.held.len());
+        let fd = p.n_buf_fd;
+        tracing::debug!(target: "cedar", token, fd, held = self.held.len(),
+            "cedar-zerocopy: picture handed to the presenter as a dma-buf");
+        let stamp = source.stamp.map(|mut s| {
+            s.ready_ns = punktfunk_core::quic::wall_clock_ns();
+            s
+        });
+        Ok(Some(CedarOutput {
+            frame: DecodedImage::NativeDmabuf(DmabufFrame {
+                width,
+                height,
+                coded_width: width,
+                coded_height: height,
+                fourcc: DRM_FORMAT_YUV420,
+                modifier: DRM_FORMAT_MOD_LINEAR,
+                planes: vec![
+                    DmabufPlane {
+                        fd,
+                        offset: 0,
+                        stride,
+                    },
+                    DmabufPlane {
+                        fd,
+                        offset: u_off as u32,
+                        stride: chroma_stride,
+                    },
+                    DmabufPlane {
+                        fd,
+                        offset: v_off as u32,
+                        stride: chroma_stride,
+                    },
+                ],
+                color: source.color,
+                keyframe: source.facts.is_idr,
+                // The vendor hands the picture over complete, but this rung's
+                // intra-refresh mark lives on `CpuPlanarFrame::recovery` and a
+                // dmabuf frame has no such field. Reporting no evidence is the
+                // honest answer; a zero-copy frame does not claim recovery.
+                references_clean: false,
+                sync_fds: Vec::new(),
+                pool_key: (self.pool_generation << 32) | u64::from(fd as u32),
+                path: DECODER_PIN,
+                guard: DrmFrameGuard(FrameGuard::Cedar(CedarFrameGuard::new(
+                    token,
+                    self.release_tx.clone(),
+                ))),
+            }),
+            stamp,
+        }))
     }
 
     fn copy_picture(&mut self, pic: *const VideoPicture) -> Result<CedarOutput> {
@@ -1408,7 +1571,10 @@ impl NativeCedarDecoder {
             s.ready_ns = punktfunk_core::quic::wall_clock_ns();
             s
         });
-        Ok(CedarOutput { frame, stamp })
+        Ok(CedarOutput {
+            frame: DecodedImage::Cpu(frame),
+            stamp,
+        })
     }
 
     /// Diagnostic only: map the vendor's exported frame and compare it with the

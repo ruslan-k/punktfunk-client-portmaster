@@ -59,7 +59,7 @@ DECODE_NEW = DECODE_OLD + (
     "            // on the software rung's path; the `stats:` tag is `native-cedar`.\n"
     "            #[cfg(target_os = \"linux\")]\n"
     "            Backend::NativeCedar(c) => (\n"
-    "                c.decode(au).map(|f| f.map(DecodedImage::Cpu)),\n"
+    "                c.decode(au),\n"
     "                c.take_recovery_request(),\n"
     "            ),\n"
 )
