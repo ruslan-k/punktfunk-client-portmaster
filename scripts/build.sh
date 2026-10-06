@@ -144,6 +144,8 @@ rustfmt --edition 2024 \
 # Pure-std phase counters are exercised on the native builder, not merely compiled.
 rustc --test --edition 2024 "$ROOT/patches/cedar_phases.rs" -o "$BUILD/cedar-phase-tests"
 "$BUILD/cedar-phase-tests"
+rustc --test --edition 2024 "$ROOT/tests/cedar_pts_tests.rs" -o "$BUILD/cedar-pts-tests"
+"$BUILD/cedar-pts-tests"
 
 cargo build --locked --release --target "$TARGET" \
   -p punktfunk-cli \

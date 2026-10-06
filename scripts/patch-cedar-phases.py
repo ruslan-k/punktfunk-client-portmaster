@@ -36,7 +36,11 @@ def main():
     helper = port / 'patches/cedar_phases.rs'
     if not helper.is_file():
         raise SystemExit('cedar phases: missing helper; no writes')
+    pts_helper = port / 'patches/cedar_pts.rs'
+    if not pts_helper.is_file():
+        raise SystemExit('cedar phases: missing PTS helper; no writes')
     text = text.replace(START, START_NEW).replace(DECODE, DECODE_NEW)
+    shutil.copyfile(pts_helper, src / 'cedar_pts.rs')
     shutil.copyfile(helper, src / 'cedar_phases.rs')
     path.write_text(text)
     print('cedar phases: helper and session timers installed')

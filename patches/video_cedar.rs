@@ -36,6 +36,9 @@ use std::time::Instant;
 #[path = "cedar_phases.rs"]
 mod phases;
 use phases::{PhaseStats, elapsed_us, queue_picture};
+#[path = "cedar_pts.rs"]
+mod pts;
+use pts::PtsLedger;
 
 use anyhow::anyhow;
 use anyhow::bail;
@@ -466,6 +469,9 @@ pub(crate) struct NativeCedarDecoder {
     logged_at: u64,
     profile: Option<PhaseStats>,
     output_fifo: bool,
+    pts_probe: Option<PtsLedger<u64>>,
+    pts_matches: u64,
+    pts_unmatched: u64,
     start: Instant,
 }
 
@@ -531,6 +537,10 @@ impl NativeCedarDecoder {
             // Device A/B proved newest-wins discarded half the pictures.
             // Default FIFO; explicit 0 retains the old control for diagnostics.
             output_fifo: std::env::var("PUNKTFUNK_CEDAR_FIFO").as_deref() != Ok("0"),
+            pts_probe: (std::env::var("PUNKTFUNK_CEDAR_PTS_PROBE").as_deref() == Ok("1"))
+                .then(PtsLedger::default),
+            pts_matches: 0,
+            pts_unmatched: 0,
             start: Instant::now(),
         })
     }
@@ -791,12 +801,20 @@ impl NativeCedarDecoder {
         data.p_data = buf;
         data.n_length = len;
         data.n_pts = -1;
+        if self.pts_probe.is_some() { data.n_pts = self.aus as i64 * 1000; }
         data.b_is_first_part = 1;
         data.b_is_last_part = 1;
         data.b_valid = 1;
         // SAFETY: `handle` is live and `data` is a live local for the call.
         let rc = unsafe { (self.libs.submit_stream_data)(self.handle, &mut data, STREAM_INDEX) };
         ensure!(rc >= 0, "cedar: SubmitVideoStreamData rc={rc}");
+        if let Some(probe) = self.pts_probe.as_mut() {
+            probe.insert(data.n_pts, self.aus).map_err(|e| anyhow!(e))?;
+            if self.aus <= 16 || self.aus.is_multiple_of(120) {
+                tracing::info!(target: "cedar", au = self.aus, pts = data.n_pts,
+                    outstanding = probe.len(), "cedar-pts-submit");
+            }
+        }
         Ok(retired)
     }
 
@@ -885,6 +903,15 @@ impl NativeCedarDecoder {
         // read below is a scalar or a plane range the header documents, and
         // the pointer stays valid until ReturnPicture (already en route).
         let p = unsafe { &*pic };
+        if let Some(probe) = self.pts_probe.as_mut() {
+            let source_au = probe.take(p.n_pts);
+            if source_au.is_some() { self.pts_matches += 1; } else { self.pts_unmatched += 1; }
+            if self.aus <= 16 || self.aus.is_multiple_of(120) || source_au.is_none() {
+                tracing::info!(target: "cedar", input_au = self.aus, source_au = ?source_au,
+                    pts = p.n_pts, matches = self.pts_matches, unmatched = self.pts_unmatched,
+                    outstanding = probe.len(), "cedar-pts-output");
+            }
+        }
         if self.profile.is_some() && (self.aus <= 8 || self.aus.is_multiple_of(120)) {
             tracing::info!(target: "cedar", au = self.aus, slot = p.n_id, pts = p.n_pts,
                 progressive = p.b_is_progressive, top_field_first = p.b_top_field_first,
@@ -980,6 +1007,8 @@ impl Drop for NativeCedarDecoder {
         }
         tracing::info!(target: "cedar",
             aus = self.aus, frames = self.frames_out, empties = self.empties, errors = self.errors,
+            pts_matches = self.pts_matches, pts_unmatched = self.pts_unmatched,
+            pts_outstanding = self.pts_probe.as_ref().map_or(0, PtsLedger::len),
             "cedar: decoder closed");
     }
 }
