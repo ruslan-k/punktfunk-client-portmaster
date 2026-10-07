@@ -755,3 +755,40 @@ port:
 
 The hold and release path is also verified at debug level: 8411 pictures handed over and
 8411 returned, `ReturnPicture refused` zero, `peak_held=3`, steady `still_held=1`.
+
+## Drain retry backoff: 200 us -> 50 us (measured, -130 us)
+
+`retry_async` (patches/cedar_async.rs) retries only when no picture has been produced
+yet in this drain call, the result is CONTINUE/NO_BITSTREAM and the poll budget has
+not run out. The retry sleeps before the poll that starts the vendor decode, so the
+sleep lands on the AU->picture path one to one. The phase census showed it as
+"unattributed drain body" (296 us/frame against 39 us of arm timers) because it sits
+inside stage 6 but outside stages 8 and 9; stage 10 now measures it directly.
+
+Three arms, ~2400 frames each, same pipeline, same stream:
+
+| retry_us | whole decode | stage 6 (body) | stage 10 (backoff) | polls/frame |
+|---|---|---|---|---|
+| 200 (old default) | 2746 us | 296 us | (not measured) | 1.04 |
+| 50 (new default) | 2616 us | 152 us | 112 us | 1.04 |
+| 0 (tight poll) | 2633 us | 40 us | 0.1 us | 26.8 |
+
+- `sleep(50 us)` really costs ~107 us on this device (timer/scheduler granularity),
+  which is why the old 200 us nominal produced the observed ~257 us.
+- 50 and 0 are equal within noise on decode (2616 vs 2633 us): at 50 the sleep roughly
+  matches how long the SBM parser needs the AU anyway, so 0 only replaces the sleep
+  with ~27 extra NO_BITSTREAM polls (9.4 us each). 50 is the default; 0 buys nothing
+  and polls 27x more.
+- Quality is untouched: this is a polling backoff, not a bitstream or picture knob.
+  Both arms kept native-cedar, zero-copy, lost 0, skipped 0.
+
+### The mid-run step is the network, not the decoder
+
+In the 0 us arm the run changed regime ~65 s in: display 1.1 -> 26.6 ms, e2e
+8.8 -> 34.8 ms, stable afterwards, while the decode census stayed identical
+(stage 6 39.8 us, stage 10 0.1 us, whole decode 2617 us, vendor unchanged) and every
+presenter field stayed identical (submit 71 us, fence 16 us, present 48 us,
+jitter 0, late 0, misses 0). The client logged `quinn_udp: sendmsg error: Os { code: 5,
+Input/output error }` and `halting segmentation offload` at 12:35:59 and 12:36:09, just
+before the step. So the added latency is in the client's Wi-Fi path, not in our code.
+That makes the link (power save is on) the next thing to measure.

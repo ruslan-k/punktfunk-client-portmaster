@@ -37,10 +37,10 @@ fn async_controls_are_opt_in_and_bounded() {
     assert_eq!((t.poll_budget_us,t.append_aud),(5000,1));
     assert!(CedarTuning::from_lookup(|k|if k=="PUNKTFUNK_CEDAR_POLL_US" {Some("20000".into())} else {None}).is_err());
     // The retry backoff is a latency knob, not a picture knob: its default is the
-    // verified 200 us, 0 is legal (no backoff at all), and it is bounded.
-    assert_eq!(baseline.retry_us,200);
-    let tight=CedarTuning::from_lookup(|k|if k=="PUNKTFUNK_CEDAR_RETRY_US" {Some("50".into())} else {None}).unwrap();
-    assert_eq!(tight.retry_us,50);
+    // measured 50 us, 0 is legal (tight poll), and it is bounded.
+    assert_eq!(baseline.retry_us,50);
+    let wide=CedarTuning::from_lookup(|k|if k=="PUNKTFUNK_CEDAR_RETRY_US" {Some("200".into())} else {None}).unwrap();
+    assert_eq!(wide.retry_us,200);
     let off=CedarTuning::from_lookup(|k|if k=="PUNKTFUNK_CEDAR_RETRY_US" {Some("0".into())} else {None}).unwrap();
     assert_eq!(off.retry_us,0);
     assert!(CedarTuning::from_lookup(|k|if k=="PUNKTFUNK_CEDAR_RETRY_US" {Some("6000".into())} else {None}).is_err());

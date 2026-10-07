@@ -678,7 +678,7 @@ impl NativeCedarDecoder {
             immediate_handoff: std::env::var("PUNKTFUNK_CEDAR_HANDOFF").as_deref() == Ok("1"),
             drop_b_delay: 0,
             poll_budget_us: 0,
-            retry_us: 200,
+            retry_us: 50,
             append_aud: false,
             low_delay: false,
             zero_reorder_verified: false,
