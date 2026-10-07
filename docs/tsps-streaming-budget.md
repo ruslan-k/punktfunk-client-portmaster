@@ -356,11 +356,13 @@ here, and a driver that refuses create after answering the query is exactly the
 case the demotion ladder exists for.
 
 A device-side probe with a device created (so the extension is actually enabled)
-answered most of it: the driver ACCEPTS every combination tried, including exactly
-the one the presenter refuses - R8_UNORM 640x360 with a DMA_BUF_EXT chain at
-offset 1152000 and stride 640 returns VK_SUCCESS, as do offsets 0 / 921600 /
-1152000 / 1155072 / 1382400 and extents 1280x720 / 640x368 / 512x512 / 256x256 /
-64x64. So this is not a size, offset-alignment or modifier limitation.
+was run to name the tuple. Its answer - "the driver ACCEPTS every combination
+tried" - does not hold: the probe built its images with `VkFormat` 1000014000
+(`VK_FORMAT_R8_UNORM` is 9) and `VkImageDrmFormatModifierExplicitCreateInfoEXT`
+with sType 1000158001 (the header and ash 0.38 both say 1000158004), so the
+driver never received the plane layout the presenter sends. Re-run with the real
+constants, the refusal reproduces outside the presenter - see "Zero-copy: the
+plane offset belongs to the binding" below.
 
 The device extension census: VK_EXT_external_memory_dma_buf, VK_KHR_external_memory_fd
 and VK_EXT_image_drm_format_modifier are all present; VK_KHR_queue_family_foreign is
@@ -477,3 +479,77 @@ the demo-validated values (planar-420 output — the demo prints
 `eOutputPixelFormat = 1` — and holding 2/2/2; every other knob zeroed), and
 the module's unit tests pin the layout, so a drift fails at test time, not at
 the first stream.
+
+## Zero-copy: the plane offset belongs to the binding (measured)
+
+The presenter's planar import was refused on the chroma plane with
+`ERROR_INVALID_DRM_FORMAT_MODIFIER_PLANE_LAYOUT_EXT`. A device probe with a device
+created and valid constants (`R8_UNORM` = 9, explicit-create sType 1000158004,
+modifier 0) reproduces that outside the presenter, and one axis at a time gives the
+rule:
+
+| plane layout | result |
+| --- | --- |
+| 1280x720, 640x360, 640x368, 640x364, 512x512, 256x256, 64x64 at offset 0 | SUCCESS |
+| any non-zero offset (4096, 65536, 230400, 460800, 921600, 1152000, 1155072) | refused |
+| stride below the plane width (512 for a 640-wide plane) | refused |
+| stride at or above the width (640, 1024) | SUCCESS |
+| usage SAMPLED, TRANSFER_DST, both | SUCCESS |
+| `R8_UINT`, `R8G8B8A8_UNORM` | refused |
+| modifier LINEAR (0) | SUCCESS |
+| modifier AFBC (`0x0100_0000_0000_0000`), INVALID | refused |
+
+So the extent, the usage and the offset's alignment are not the gate: **the explicit
+plane offset must be 0**, and the plane's byte offset belongs to `vkBindImageMemory`.
+The same probe measured the shape the presenter now uses:
+
+- three images (Y 1280x720, U and V 640x360) with layout offset 0 and stride equal to
+  the plane width: all SUCCESS, `memoryRequirements` size 921600 / 230400, alignment 64;
+- one imported `VkDeviceMemory` from the picture fd, allocation size 1382400, no
+  dedicated block: SUCCESS, and binding those images at 0 / 1152000 / 921600: SUCCESS.
+  Every offset is a multiple of the 64-byte alignment, and 1152000 + 230400 = 1382400
+  is exactly the export's payload;
+- a dedicated allocation bound at a non-zero offset is accepted by this driver too,
+  but the spec requires `memoryOffset = 0` for a dedicated allocation, so the import
+  no longer uses one.
+
+`vkCreateImage` with `VK_IMAGE_TILING_LINEAR` and a `DMA_BUF_EXT` chain is refused for
+every plane, including 1280x720 at offset 0, so a "plain LINEAR external image" is not
+an alternative to the modifier chain here - it does not create at all. A local
+(non-external) LINEAR image of the same extent does create, which is what the removed
+diagnostic line measured and why its result was misread as a positive.
+
+Proven: creates, imports and binds. Not proven: that the sampled picture is correct,
+which the device run has to show.
+
+The port change is one line of meaning in `scripts/patch-presenter-planar.py`:
+`plane_image` writes offset 0, allocates `offset + reqs.size` bytes from the plane fd
+and binds at the plane offset. The diagnostic retries (plain LINEAR, sized layout)
+went with it; they answered a question that is now answered.
+
+### The external-VkBuffer route, checked because it was proposed
+
+A review suggested giving up on `VkImage` and importing the whole 1382400-byte export
+as one `VkBuffer` read through an `R8_UNORM` uniform texel buffer. Measured on the
+device:
+
+- `vkGetPhysicalDeviceExternalBufferProperties(DMA_BUF_EXT)` answers `features = 0x0`
+  for every usage tried (TRANSFER_DST, UNIFORM_TEXEL, STORAGE_TEXEL, UNIFORM_BUFFER,
+  STORAGE_BUFFER, VERTEX) - "not importable" - and the import works anyway:
+  `vkCreateBuffer` with `VkExternalMemoryBufferCreateInfo(DMA_BUF_EXT)`,
+  `vkGetMemoryFdPropertiesKHR` (`typeBits = 0x2`), `vkAllocateMemory` with
+  `VkImportMemoryFdInfoKHR` and `vkBindBufferMemory` are VK_SUCCESS on a real dma-heap
+  buffer. That capability query cannot be used as a gate on this driver.
+- The limits do not block it either: `maxTexelBufferElements` and
+  `maxStorageBufferRange` are both 268435456 (2^28) and `maxUniformBufferRange` is
+  65536, so a 1382400-element texel buffer is legal.
+
+The route works, and it is still not the one taken: it needs a CSC shader over
+`texelFetch` and its own descriptor set, while the image path keeps the existing
+planar CSC pass and costs one line in the create info.
+
+Probe note for the next ctypes run on this device: the driver pads
+`VkPhysicalDeviceLimits` to offset 296 inside `VkPhysicalDeviceProperties` (a struct
+pre-filled with 0xAA comes back written at 0..291 and 296..819). Read at the spec's
+292 and every limit is shifted by one `uint32`, which reads as nonsense
+(`maxImageDimension1D` = 0, `maxPushConstantsSize` = 268435456).

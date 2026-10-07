@@ -108,6 +108,7 @@ class PresenterPlanarImport(unittest.TestCase):
         original = pristine('crates/pf-presenter/src/dmabuf.rs')
         original_present = pristine('crates/pf-presenter/src/vk/present.rs')
         self.assertNotIn('MAX_PLANES', original)
+        self.assertIn('offset: u64::from(offset),', original)
         with tempfile.TemporaryDirectory() as temp:
             # A tree whose anchors are intact applies, and re-running is a no-op.
             patched = pathlib.Path(temp)
@@ -121,6 +122,17 @@ class PresenterPlanarImport(unittest.TestCase):
             self.assertIn('const MAX_PLANES: usize = 3;', text)
             self.assertIn('fn import(', text)
             self.assertNotIn('fn import(\n    device: &ash::Device,', text)
+            # The plane byte offset moves from the explicit layout to the binding:
+            # this driver refuses any non-zero plane offset at create
+            # (ERROR_INVALID_DRM_FORMAT_MODIFIER_PLANE_LAYOUT_EXT at 4096, 65536,
+            # 921600 and 1152000 alike) and imports the image when it is bound at
+            # that offset. A dedicated allocation would have to bind at 0, so the
+            # block goes away with the offset.
+            self.assertIn('offset: 0, // Non-zero is refused', text)
+            self.assertIn('allocation_size(u64::from(offset) + reqs.size)', text)
+            self.assertIn('bind_image_memory(image, memory, u64::from(offset))', text)
+            self.assertNotIn('MemoryDedicatedAllocateInfo', text)
+            self.assertNotIn('plain_linear_rc', text)
             again = subprocess.run([sys.executable, str(SCRIPT), temp],
                                    capture_output=True, text=True)
             self.assertEqual(again.returncode, 0, again.stdout + again.stderr)

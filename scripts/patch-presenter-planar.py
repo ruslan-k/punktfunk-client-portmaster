@@ -17,6 +17,14 @@ code rather than from taste:
 * `let p = &cache.planes[&frame.pool_key]` hands out a *reference* to the cache, so
   the plane arrays must stay `Copy`: fixed length (`MAX_PLANES`), not `Vec`.
 
+The plane offset is not the layout's business on this device: the driver refuses
+any non-zero `offset` in `VkSubresourceLayout`
+(`ERROR_INVALID_DRM_FORMAT_MODIFIER_PLANE_LAYOUT_EXT` at 4096, 65536, 921600 and
+1152000 alike) and imports the same image when it is bound at that offset. So
+`plane_image` writes offset 0, allocates `offset + reqs.size` bytes from the plane
+fd and binds at the plane's offset; the dedicated-allocation block goes with it,
+because a dedicated allocation binds at offset 0.
+
 Every anchor must match exactly once, and the replaced function body is delimited
 by its own signature and the next item's doc comment; drift aborts before writing.
 The replacement keeps the signature's parameter ORDER (`instance, pdev, device,
@@ -146,102 +154,6 @@ EDITS = [
         '        planes: p.planes,\n'
         '        planar: p.planar,\n',
     ),
-    (
-        'import failure diagnostic',
-        '    }\n'
-        '    .with_context(|| {\n'
-        '        format!("create {width}x{height} {format:?} image (modifier {modifier:#018x})")\n'
-        '    })?;\n',
-        '    };\n'
-        '    // This driver refuses the plane LAYOUT, and the same tuple is accepted in\n'
-        '    // isolation, so on failure retry the create with a plain LINEAR tiling and\n'
-        '    // no modifier chain: that names which half this process is refused.\n'
-        '    let image = match image {\n'
-        '        Ok(image) => image,\n'
-        '        Err(e) => {\n'
-        '            let plain = unsafe {\n'
-        '                device.create_image(\n'
-        '                    &vk::ImageCreateInfo::default()\n'
-        '                        .image_type(vk::ImageType::TYPE_2D)\n'
-        '                        .format(format)\n'
-        '                        .extent(vk::Extent3D {\n'
-        '                            width,\n'
-        '                            height,\n'
-        '                            depth: 1,\n'
-        '                        })\n'
-        '                        .mip_levels(1)\n'
-        '                        .array_layers(1)\n'
-        '                        .samples(vk::SampleCountFlags::TYPE_1)\n'
-        '                        .tiling(vk::ImageTiling::LINEAR)\n'
-        '                        .usage(vk::ImageUsageFlags::SAMPLED)\n'
-        '                        .initial_layout(vk::ImageLayout::UNDEFINED),\n'
-        '                    None,\n'
-        '                )\n'
-        '            };\n'
-        '            let plain_rc = match &plain {\n'
-        '                Ok(img) => {\n'
-        '                    // SAFETY: created just above, never submitted.\n'
-        '                    unsafe { device.destroy_image(*img, None) };\n'
-        '                    0\n'
-        '                }\n'
-        '                Err(pe) => pe.as_raw(),\n'
-        '            };\n'
-        '            // Second retry: the same modifier chain, but with the plane byte length\n'
-        '            // filled in. A zero size leaves the driver to infer a padded pitch,\n'
-        '            // and it can only validate a non-zero offset once the buffer is known.\n'
-        '            let sized = [vk::SubresourceLayout {\n'
-        '                offset: u64::from(offset),\n'
-        '                size: u64::from(width) * u64::from(height),\n'
-        '                row_pitch: u64::from(stride),\n'
-        '                array_pitch: 0,\n'
-        '                depth_pitch: 0,\n'
-        '            }];\n'
-        '            let mut mi2 = vk::ImageDrmFormatModifierExplicitCreateInfoEXT::default()\n'
-        '                .drm_format_modifier(modifier)\n'
-        '                .plane_layouts(&sized);\n'
-        '            let mut ei2 = vk::ExternalMemoryImageCreateInfo::default()\n'
-        '                .handle_types(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT);\n'
-        '            let sized_rc = match unsafe {\n'
-        '                device.create_image(\n'
-        '                    &vk::ImageCreateInfo::default()\n'
-        '                        .push_next(&mut mi2)\n'
-        '                        .push_next(&mut ei2)\n'
-        '                        .image_type(vk::ImageType::TYPE_2D)\n'
-        '                        .format(format)\n'
-        '                        .extent(vk::Extent3D { width, height, depth: 1 })\n'
-        '                        .mip_levels(1)\n'
-        '                        .array_layers(1)\n'
-        '                        .samples(vk::SampleCountFlags::TYPE_1)\n'
-        '                        .tiling(vk::ImageTiling::DRM_FORMAT_MODIFIER_EXT)\n'
-        '                        .usage(vk::ImageUsageFlags::SAMPLED)\n'
-        '                        .initial_layout(vk::ImageLayout::UNDEFINED),\n'
-        '                    None,\n'
-        '                )\n'
-        '            } {\n'
-        '                Ok(img) => {\n'
-        '                    // SAFETY: created just above, never submitted.\n'
-        '                    unsafe { device.destroy_image(img, None) };\n'
-        '                    0\n'
-        '                }\n'
-        '                Err(pe) => pe.as_raw(),\n'
-        '            };\n'
-        '            tracing::warn!(target: "presenter-import-diag",\n'
-        '                rc = e.as_raw(), plain_linear_rc = plain_rc, sized_layout_rc = sized_rc,\n'
-        '                width, height, format = ?format, modifier, offset, stride,\n'
-        '                "modifier-chain create refused; retried plain LINEAR and a sized layout");\n'
-        '            tracing::warn!(target: "presenter-import-diag",\n'
-        '                rc = e.as_raw(), plain_linear_rc = plain_rc, width, height,\n'
-        '                format = ?format, modifier, offset, stride,\n'
-        '                "modifier-chain create refused; plain LINEAR retried");\n'
-        '            return Err(e).with_context(|| {\n'
-        '                format!(\n'
-        '                    "create {width}x{height} {format:?} image (modifier {modifier:#018x}, \\\n'
-        '                     offset {offset}, stride {stride}; plain LINEAR rc {plain_rc})"\n'
-        '                )\n'
-        '            });\n'
-        '        }\n'
-        '    };\n',
-    ),
 ]
 
 PRESENT_EDITS = [
@@ -292,6 +204,138 @@ PRESENT_EDITS = [
 
 IMPORT_START = 'fn import(\n'
 IMPORT_END = '/// One plane as an explicit-modifier image.'
+
+PLANE_START = '/// One plane as an explicit-modifier image.'
+PLANE_END = '#[cfg(test)]\nmod tests {'
+
+
+NEW_PLANE_IMAGE = '''/// One plane as an explicit-modifier image. Vulkan takes the fd it is given,
+/// so this dups; the frame guard keeps the original.
+///
+/// The plane's byte offset belongs to the binding, not to the create info: this
+/// driver refuses a non-zero plane offset in the explicit layout
+/// (`ERROR_INVALID_DRM_FORMAT_MODIFIER_PLANE_LAYOUT_EXT` at 4096, 65536, 921600
+/// and 1152000 alike) and imports the same image when it is bound at that
+/// offset. The allocation therefore starts at the export's first byte.
+#[allow(clippy::too_many_arguments)]
+fn plane_image(
+    device: &ash::Device,
+    ext_mem_fd: &ash::khr::external_memory_fd::Device,
+    width: u32,
+    height: u32,
+    format: vk::Format,
+    fd: std::os::fd::RawFd,
+    offset: u32,
+    stride: u32,
+    modifier: u64,
+) -> Result<(vk::Image, vk::DeviceMemory)> {
+    let plane_layouts = [vk::SubresourceLayout {
+        offset: 0, // Non-zero is refused; the plane offset moves to the bind.
+        size: 0,   // 0 on import: the driver derives size.
+        row_pitch: u64::from(stride),
+        array_pitch: 0,
+        depth_pitch: 0,
+    }];
+    let mut modifier_info = vk::ImageDrmFormatModifierExplicitCreateInfoEXT::default()
+        .drm_format_modifier(modifier)
+        .plane_layouts(&plane_layouts);
+    let mut external_info = vk::ExternalMemoryImageCreateInfo::default()
+        .handle_types(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT);
+    // SAFETY: create-info and pNext locals (`modifier_info`, `external_info`)
+    // outlive the call.
+    let image = unsafe {
+        device.create_image(
+            &vk::ImageCreateInfo::default()
+                .push_next(&mut modifier_info)
+                .push_next(&mut external_info)
+                .image_type(vk::ImageType::TYPE_2D)
+                .format(format)
+                .extent(vk::Extent3D {
+                    width,
+                    height,
+                    depth: 1,
+                })
+                .mip_levels(1)
+                .array_layers(1)
+                .samples(vk::SampleCountFlags::TYPE_1)
+                .tiling(vk::ImageTiling::DRM_FORMAT_MODIFIER_EXT)
+                .usage(vk::ImageUsageFlags::SAMPLED)
+                .initial_layout(vk::ImageLayout::UNDEFINED),
+            None,
+        )
+    }
+    .with_context(|| {
+        format!("create {width}x{height} {format:?} image (modifier {modifier:#018x}, offset {offset}, stride {stride})")
+    })?;
+
+    let result = (|| {
+        let mut fd_props = vk::MemoryFdPropertiesKHR::default();
+        // SAFETY: `fd` is a live plane fd of the caller's `DmabufFrame`;
+        // `fd_props` is a local outliving the call.
+        unsafe {
+            ext_mem_fd.get_memory_fd_properties(
+                vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT,
+                fd,
+                &mut fd_props,
+            )
+        }
+        .context("vkGetMemoryFdPropertiesKHR")?;
+        // SAFETY: `image` was created above and has not been destroyed.
+        let reqs = unsafe { device.get_image_memory_requirements(image) };
+        let bits = reqs.memory_type_bits & fd_props.memory_type_bits;
+        let type_index = (0..32u32)
+            .find(|i| bits & (1 << i) != 0)
+            .context("no importable memory type for dmabuf")?;
+
+        // Vulkan owns the fd it imports — dup so the decoder guard keeps the original.
+        // SAFETY: `fd` is a plane fd of the caller's `DmabufFrame`. `DrmFrameGuard`
+        // keeps those fds open until `import` moves it onto `HwFrame`. The borrow
+        // ends at `try_clone_to_owned`.
+        let owned = unsafe { BorrowedFd::borrow_raw(fd) }
+            .try_clone_to_owned()
+            .context("dup dmabuf fd")?;
+        let mut import_info = vk::ImportMemoryFdInfoKHR::default()
+            .handle_type(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT)
+            .fd(owned.as_raw_fd());
+        // No dedicated block: a dedicated allocation binds at offset 0, and this
+        // plane is bound at its own offset inside the export.
+        // SAFETY: `import_info` is a local that outlives the call; its `fd` is
+        // `owned`'s dup, still open.
+        let memory = unsafe {
+            device.allocate_memory(
+                &vk::MemoryAllocateInfo::default()
+                    .push_next(&mut import_info)
+                    .allocation_size(u64::from(offset) + reqs.size)
+                    .memory_type_index(type_index),
+                None,
+            )
+        }
+        .context("import dmabuf memory")?;
+        // Vulkan takes the fd only on a successful import. `into_raw_fd` here;
+        // `?` above still closes the dup.
+        let _ = owned.into_raw_fd();
+        // SAFETY: `image` and `memory` were created above and are still owned here.
+        if let Err(e) = unsafe { device.bind_image_memory(image, memory, u64::from(offset)) } {
+            // SAFETY: `memory` was allocated in this call and never bound, so
+            // the GPU is idle on it.
+            unsafe { device.free_memory(memory, None) };
+            return Err(e).context("bind imported memory");
+        }
+        Ok(memory)
+    })();
+
+    match result {
+        Ok(memory) => Ok((image, memory)),
+        Err(e) => {
+            // SAFETY: `image` was created in this call and never bound, so the
+            // GPU is idle on it.
+            unsafe { device.destroy_image(image, None) };
+            Err(e)
+        }
+    }
+}
+
+'''
 
 NEW_IMPORT = '''fn import(
     instance: &ash::Instance,
@@ -492,6 +536,7 @@ def main() -> int:
     for what, old, new in EDITS:
         text = replace_once(text, old, new, what)
     text = replace_region(text, IMPORT_START, IMPORT_END, NEW_IMPORT, 'import body')
+    text = replace_region(text, PLANE_START, PLANE_END, NEW_PLANE_IMAGE, 'plane_image body')
     dmabuf.write_text(text)
 
     view = present.read_text()
