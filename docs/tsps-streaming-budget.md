@@ -695,3 +695,26 @@ copies instead, so the demotion now asks it first:
 Proven so far: creates, imports, binds, a correct picture, 29701 frames with
 `empties=0 errors=0`, and 2.92 ms decode with zero-copy on. Not yet exercised on the
 device: the fallback itself, which needs a run with the import deliberately refused.
+
+### The two gaps, and the hook that makes one of them reachable
+
+`PUNKTFUNK_CEDAR_REFUSE_IMPORT` (presenter, `scripts/patch-presenter-refuse-import.py`)
+makes the presenter refuse every imported dma-buf frame - the exact signal the pump
+answers with `drop_zerocopy`. It takes the path the presenter already takes when it has
+no import support (`force_software.store(true)` then `Ok(false)`), so the pump is not
+being driven through a private door. Without the hook the fallback is unreachable on
+this device, because the import works.
+
+Two runs close what is left:
+
+1. **Hold and release counters.** `cedar-zerocopy: picture handed to the presenter as a
+   dma-buf`, `pictures returned to the vendor` and `peak_held`/`still_held` are
+   debug-level and do not print at `RUST_LOG=info`, and the close line does not carry
+   them either. They need `RUST_LOG=info,pf_client_core::video_cedar=debug` and no hook.
+   At `info` the evidence for zero-copy is indirect but consistent: 72 `dmabuf` file
+   descriptors held by the session, `pts_matches=0` (the copy path matches PTS per
+   picture), no import failure, no demotion, `output_lag_frames=[0, 0, 0, 0, 0]`.
+2. **The fallback itself.** With the hook set, the log must show `cedar: presenter
+   refused the imported planes - decoding copies`, the rung must stay `native-cedar`
+   with no `demoting to software`, and the decode call should return to the copy-path
+   cost (~0.7-0.8 ms more) while the picture stays correct.
