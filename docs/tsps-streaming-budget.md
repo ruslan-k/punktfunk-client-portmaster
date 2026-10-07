@@ -1070,3 +1070,25 @@ now the largest single remaining latency term, larger than anything left on the 
 which makes it the next thing worth measuring: what sets that depth (the capture/encoder
 pipeline, `slots=8`, `PUNKTFUNK_FRAME_DRIVEN`, or the game's own frame pacing).
 
+## What sets the host's queue: nothing tunable (it is 60-65 us)
+
+The host's own recorder over a healthy session (213 samples) reads `queue` 65 us, `capture`
+10, `submit` 209, `encode` 1598, `send` 164 -> `host_p50` 2152 us, with `fps` 60.00 and
+`repeat_fps` 0.00. A second, different game inside the same session: `queue` 60 us,
+`encode` 1571, `host_p50` 2081. The queue is not the game's, and it is not tunable:
+`PUNKTFUNK_FRAME_DRIVEN` already defaults on (`unwrap_or(true)`), both capture classes
+report `supports_arrival_wait() == true` so the loop already submits on the frame's
+arrival, and the pacer's own stage is 0.2-0.3 ms. There is no knob left that would shrink
+65 us, so the pacer and frame-driven axes are closed by measurement.
+
+The 4.08 ms seen in one session is a **per-session constant offset in the frame's pts
+domain**, not a deeper pipeline. Within that session the queue's per-window p50 by tenths
+was 4.06 -> 4.09 (stdev 0.69, driven by the single bring-up window), while the e2e *spread*
+was unchanged (p95-p50 0.75 against 0.71, p99-p50 1.17 against 1.08), its best window
+(`e2e` min 8.06) matched the other session's *median* (8.27), and every other stage,
+the capture config (`period_us` 16665/16666, `fps=60`, `slots=8`) and the pacing were
+identical. A real pipeline wait varies frame to frame and widens the tail; a constant shift
+with an unchanged shape is a stamp-domain offset. Consequence: anchor cross-session
+comparisons within a session, and do not read a step in `host_queue` as added latency
+without checking the e2e spread first.
+
