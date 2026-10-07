@@ -579,6 +579,9 @@ pub(crate) struct NativeCedarDecoder {
     async_start: Option<Instant>,
     /// Hand the presenter the vendor's dma-buf instead of a CPU copy.
     zerocopy: bool,
+    /// The presenter refused those planes: the hand-off is off for the session, and
+    /// every later refusal is about a frame sent before the switch.
+    zerocopy_refused: bool,
     /// Pictures held for the presenter, keyed by the token its guard carries.
     held: std::collections::HashMap<u64, *mut VideoPicture>,
     /// Guards send their token here when the presenter drops them.
@@ -700,6 +703,7 @@ impl NativeCedarDecoder {
             pts_unmatched: 0,
             start: Instant::now(),
             zerocopy: std::env::var("PUNKTFUNK_CEDAR_ZEROCOPY").as_deref() == Ok("1"),
+            zerocopy_refused: false,
             held: std::collections::HashMap::new(),
             release_tx: release_tx.clone(),
             release_rx,
@@ -737,14 +741,19 @@ impl NativeCedarDecoder {
     /// session instead of dropping the whole rung. `false` when the hand-off was
     /// already off, so the caller falls through to its own demotion.
     pub(crate) fn drop_zerocopy(&mut self) -> bool {
-        if !self.zerocopy {
-            return false;
+        if self.zerocopy {
+            self.zerocopy = false;
+            self.zerocopy_refused = true;
+            tracing::warn!(
+                "cedar: presenter refused the imported planes — zero-copy off, decoding copies"
+            );
+            return true;
         }
-        self.zerocopy = false;
-        tracing::warn!(
-            "cedar: presenter refused the imported planes — zero-copy off, decoding copies"
-        );
-        true
+        // A refusal after the switch can only be about a frame sent before it, or
+        // about the presenter's CPU path, and demoting the decoder fixes neither.
+        // Measured on the device: the presenter signals once per refused frame, and
+        // the second signal demoted a rung that had already switched to copies.
+        self.zerocopy_refused
     }
 
     pub(crate) fn decode(&mut self, au: &[u8]) -> Result<Option<DecodedImage>> {

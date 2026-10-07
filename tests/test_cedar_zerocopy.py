@@ -154,3 +154,27 @@ class PresenterPlanarImport(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class CedarRefusalFallback(unittest.TestCase):
+    """A refused import must not cost the rung, and later refusals must not demote it.
+
+    Measured on the device (log punktfunk-20261007-111503): the presenter signals once
+    per refused frame. The rung switched to copies on the first signal, and the second
+    signal - about a frame already in flight - demoted the decoder to software
+    (openh264), because `drop_zerocopy` answered "nothing left to drop". The rung now
+    absorbs the refusals it caused itself.
+    """
+
+    def test_a_later_refusal_is_absorbed_not_a_demotion(self):
+        src = (ROOT / 'patches/video_cedar.rs').read_text()
+        self.assertIn('zerocopy_refused: bool,', src)
+        self.assertIn('zerocopy_refused: false,', src)
+        body = src.split('pub(crate) fn drop_zerocopy')[1].split('\n    }\n')[0]
+        self.assertIn('self.zerocopy_refused = true;', body)
+        self.assertIn('return true;', body)
+        # exactly one switch, and the absorb answer comes last
+        self.assertEqual(body.count('self.zerocopy = false;'), 1)
+        self.assertLess(body.index('return true;'), body.rindex('self.zerocopy_refused'))
+        # the pump must still be able to demote when there is nothing to absorb
+        self.assertIn('if decoder.drop_zerocopy() {', (ROOT / 'scripts/patch-cedar-ready.py').read_text())
