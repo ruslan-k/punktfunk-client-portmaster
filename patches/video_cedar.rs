@@ -584,10 +584,8 @@ pub(crate) struct NativeCedarDecoder {
     /// The presenter refused those planes: the hand-off is off for the session, and
     /// every later refusal is about a frame sent before the switch.
     zerocopy_refused: bool,
-    /// Pictures held for the presenter, keyed by the token its guard carries. A short
-    /// Vec scanned linearly: the pool is ~14 buffers and the peak held is a handful, so
-    /// hashing bought nothing and the map's table was pure overhead.
-    held: Vec<(u64, *mut VideoPicture)>,
+    /// Pictures held for the presenter, keyed by the token its guard carries.
+    held: std::collections::HashMap<u64, *mut VideoPicture>,
     /// Guards send their token here when the presenter drops them.
     release_tx: std::sync::mpsc::Sender<u64>,
     release_rx: std::sync::mpsc::Receiver<u64>,
@@ -709,7 +707,7 @@ impl NativeCedarDecoder {
             start: Instant::now(),
             zerocopy: std::env::var("PUNKTFUNK_CEDAR_ZEROCOPY").as_deref() == Ok("1"),
             zerocopy_refused: false,
-            held: Vec::with_capacity(16),
+            held: std::collections::HashMap::new(),
             release_tx: release_tx.clone(),
             release_rx,
             next_token: 1,
@@ -1352,10 +1350,9 @@ impl NativeCedarDecoder {
     /// and before any vendor call, so a held pool refills promptly.
     fn drain_releases(&mut self) {
         while let Ok(token) = self.release_rx.try_recv() {
-            let Some(idx) = self.held.iter().position(|(t, _)| *t == token) else {
+            let Some(pic) = self.held.remove(&token) else {
                 continue;
             };
-            let (_, pic) = self.held.swap_remove(idx);
             // SAFETY: `pic` came from RequestPicture on this thread and has not been
             // returned yet; `token` is unique per held picture, so this runs once.
             let rc = unsafe { (self.libs.return_picture)(self.handle, pic) };
@@ -1404,12 +1401,7 @@ impl NativeCedarDecoder {
         };
         let token = self.next_token;
         self.next_token += 1;
-        // Tokens are unique per held picture, so this replaces only on a re-issued
-        // token - exactly what the map did - and otherwise appends.
-        match self.held.iter_mut().find(|(t, _)| *t == token) {
-            Some(slot) => slot.1 = pic,
-            None => self.held.push((token, pic)),
-        }
+        self.held.insert(token, pic);
         self.held_peak = self.held_peak.max(self.held.len());
         let fd = p.n_buf_fd;
         tracing::debug!(target: "cedar", token, fd, held = self.held.len(),

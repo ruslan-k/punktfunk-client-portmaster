@@ -916,6 +916,55 @@ Vec -> fixed array). The `PUNKTFUNK_CEDAR_REFUSE_IMPORT` hook is not a hot-path 
 it reads the environment once through a `OnceLock` - so removing it is tidiness, not
 performance.
 
+## Allocation-free cleanup: tried, measured slower, reverted
+
+Two per-frame containers were rewritten to remove allocations (`PtsLedger` BTreeMap ->
+fixed 128-slot window, `held` HashMap -> short Vec with a linear scan), with the existing
+contract tests plus a new one for a window with holes. Both rewrites were correct - 224
+windows, lost 0, no pool exhaustion, no `ReturnPicture` refusal - and both were slower:
+
+| arm (equal 25-window samples, runs minutes apart) | decode p50 median | p50 min/max | decode p99 | e2e p50 | actual Mbps |
+|---|---|---|---|---|---|
+| BTreeMap + HashMap (reverted to) | **2.562** | 2.528 / 2.586 | **2.734** | **7.71** | 3.16 |
+| fixed window + Vec | 2.642 | 2.606 / 2.688 | 2.776 | 8.20 | 3.33 |
+
+The distributions do not overlap, and the bitrate axis was closed earlier (5% of rate
+buys nothing), so this is the change and not the scene: ~+0.08 ms decode p50, ~+0.3 ms
+e2e. A first attempt at the window was sparse (insert and take scanned all 128 slots);
+packing the live entries into `slots[..len]` recovered only ~0.02 ms of it, so the scan
+was not the cost.
+
+The lesson, recorded because the same trap is available to anyone: 0.08 ms is ~160k
+cycles and no pair of container operations costs that. The likely cost is the *footprint*
+- a 128-slot window of ~110-byte entries is ~13 KB inside the decoder struct, while the
+BTreeMap touches one or two cache lines when the window is nearly empty, which is the
+normal case (the census shows 0-3 outstanding). A fixed window sized to the real maximum
+rather than to the historical 128 limit would be the version worth measuring; the
+BTreeMap is what ships because it measured best.
+
+`DmabufFrame.planes` stays a `Vec` for the reason below, and it is the last allocation in
+the handoff: `sync_fds` is an empty `Vec` (no allocation) and the guard is an inline enum
+variant (no box).
+
+## Production baseline
+
+Fixed unless a measurement shows a specific problem:
+
+```
+1280x720 @ 60
+client: native Cedar, LOW_DELAY=auto, POLL_US=5000, RETRY_US=50, FAST_PLAN=1, ZEROCOPY=1
+        zero-copy import failure -> Cedar packed copy -> software only on real breakage
+host:   PUNKTFUNK_PIN_CLOCKS=1
+```
+
+Open (optional, in order): a long soak for the rare tails (p99 spikes of 18-21 ms exist
+in isolated windows) with RSSI/retransmit/quinn-error counters alongside e2e; real games
+rather than a desktop scene; and only then an allocation-free Cedar cleanup
+(`PtsLedger` BTreeMap -> ring, `held` HashMap -> fixed slots, `DmabufFrame.planes`
+Vec -> fixed array). The `PUNKTFUNK_CEDAR_REFUSE_IMPORT` hook is not a hot-path cost -
+it reads the environment once through a `OnceLock` - so removing it is tidiness, not
+performance.
+
 ## Allocation-free cleanup: the ledger and the held map
 
 Two per-frame container changes, no behaviour change, contract unchanged (the existing

@@ -1,12 +1,5 @@
 //! Bounded exact-PTS association; never guesses by slot or FIFO position.
-//!
-//! The window is a fixed array of [`PTS_SLOTS`] slots: a submit writes one slot, a take
-//! scans the live entries, and neither allocates. The `BTreeMap` this replaced
-//! allocated a node per submit and freed it per take - one malloc/free pair per frame,
-//! in the drain's hot path, on a device where the tail latency is what matters.
-
-/// The historical outstanding limit; also the size of the fixed window.
-const PTS_SLOTS: usize = 128;
+use std::collections::BTreeMap;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct FrameStamp {
@@ -26,40 +19,18 @@ impl TokenClock {
         Some(self.last)
     }
 }
-pub(crate) struct PtsLedger<T> {
-    /// Live entries packed into `slots[..len]`; the rest is never touched. Dense on
-    /// purpose: a sparse window made every lookup walk all [`PTS_SLOTS`] slots, which
-    /// measured +0.07 ms per frame (14 KB of cold cache lines per frame) against the
-    /// BTreeMap it replaced. Order is irrelevant to every caller, so a take swaps the
-    /// last live entry into the hole.
-    slots: [Option<(i64, T)>; PTS_SLOTS],
-    len: usize,
-}
+pub(crate) struct PtsLedger<T> { entries: BTreeMap<i64, T> }
 impl<T> Default for PtsLedger<T> {
-    fn default() -> Self { Self { slots: std::array::from_fn(|_| None), len: 0 } }
+    fn default() -> Self { Self { entries: BTreeMap::new() } }
 }
 impl<T> PtsLedger<T> {
     pub fn insert(&mut self, pts: i64, facts: T) -> Result<(), &'static str> {
         if pts <= 0 { return Err("nonpositive Cedar PTS"); }
-        if self.live().any(|(k, _)| *k == pts) { return Err("duplicate Cedar PTS"); }
-        if self.len >= PTS_SLOTS { return Err("128 outstanding Cedar PTS limit reached"); }
-        // `len` is the next free slot: the window is packed, so this is O(1).
-        self.slots[self.len] = Some((pts, facts));
-        self.len += 1;
+        if self.entries.contains_key(&pts) { return Err("duplicate Cedar PTS"); }
+        if self.entries.len() >= 128 { return Err("128 outstanding Cedar PTS limit reached"); }
+        self.entries.insert(pts, facts);
         Ok(())
     }
-    pub fn take(&mut self, pts: i64) -> Option<T> {
-        let idx = self.live().position(|(k, _)| *k == pts)?;
-        let (_, facts) = self.slots[idx].take()?;
-        self.len -= 1;
-        // Move the last live entry into the hole; nothing depends on the order.
-        let last = self.slots[self.len].take();
-        self.slots[idx] = last;
-        Some(facts)
-    }
-    pub fn len(&self) -> usize { self.len }
-    /// The live entries only - never the free tail of the window.
-    fn live(&self) -> impl Iterator<Item = &(i64, T)> {
-        self.slots[..self.len].iter().filter_map(|s| s.as_ref())
-    }
+    pub fn take(&mut self, pts: i64) -> Option<T> { self.entries.remove(&pts) }
+    pub fn len(&self) -> usize { self.entries.len() }
 }
