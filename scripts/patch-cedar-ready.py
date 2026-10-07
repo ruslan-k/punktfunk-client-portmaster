@@ -38,6 +38,9 @@ SESSION_EDITS=[
                     // drops its hand-off and keeps decoding copies, and only a rung
                     // that cannot do that demotes.
                     if decoder.drop_zerocopy() {
+                        tracing::warn!(
+                            "cedar: presenter refused the imported planes — decoding copies"
+                        );
                     } else if let Err(e) = decoder.force_software() {'''),
 ('                    Ok(Some(image)) => {\n',
  '                    Ok(Some(image)) => {\n                        let mut image = image;\n                        loop {\n'),
