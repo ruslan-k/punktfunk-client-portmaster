@@ -585,7 +585,7 @@ One-axis A/B on the same scene, same day, both with `PUNKTFUNK_CEDAR_PROFILE=1`:
 So the copy is gone and the decode call is ~0.8 ms cheaper, which is a little more
 than the 0.9 ms the copy itself cost.
 
-### Open: the ~43 ms in front of the decoder
+### The ~43 ms in front of the decoder: measured, then explained
 
 The numbers above are 5x the latency this document recorded earlier (decode 4.55 ms,
 capture-to-presentation 12.1 ms), and the gap is not in the decode work: the census
@@ -603,9 +603,9 @@ It is not this change. Three controls, all at ~46.6 ms decode-inclusive:
 - `bin/punktfunk` is byte-identical to the pre-change install, so the client's receive
   and decode scheduling is unchanged.
 
-What is left to look at is the receive-to-decode hand-off itself (client AU pump versus
-host send cadence), and it dominates today's end-to-end latency far more than the
-0.9 ms copy does. Worth its own measurement before more decode work.
+That left the consumer side as the suspect, and it was wrong - see "The ~43 ms was the
+wrapper" at the end of this document. No queue-telemetry build is needed for this
+question.
 
 #### Three cheap hypotheses, measured and dropped
 
@@ -623,9 +623,10 @@ installed build (`2aacc46`, no rebuild) before writing any telemetry:
   decode-inclusive 46.6 ms, capture-to-presentation 61.4 ms, against 46.6 / 61.6 with
   the boost on. No priority interaction to find.
 - **A real backlog.** No `jump-to-live`, no flush and no shed line appears in any run,
-  so the standing depth never reaches `QUEUE_HIGH` (6). The queue stands at ~2-3 AUs,
-  which the channel tolerates by design: `preroll_draining` only ends once the depth
-  first falls to `QUEUE_LOW` (2).
+  so the standing depth never reaches `QUEUE_HIGH` (6). Depth itself was inferred from
+  the latency, never measured, and nothing retains two AUs on purpose: `QUEUE_LOW` is
+  hysteresis inside `JumpToLive::observe`, and the H.264 path pops the front
+  unconditionally.
 
 That leaves the consumer side: with arrival clean and the decode 2.6 ms of a 16.7 ms
 frame, something downstream of the decoder keeps the channel from draining. The
@@ -634,3 +635,39 @@ build - timestamps at receive, channel pop, decode enter, decode exit and hand-o
 plus a queue-depth histogram - and it should include the hand-off into the presenter's
 bounded channel, because a 60 Hz FIFO presenter is the only part of the path that has
 been shown to throttle a 60 fps producer.
+
+### The ~43 ms was the wrapper, not the client
+
+Every run in the two sections above was launched by the diagnostic harness
+(`/mnt/SDCARD/Roms/PORTS/cedar-test.sh`, written by the measurement script), which
+sourced `runtime-env.sh` and then **cleared** `PUNKTFUNK_CEDAR_LOW_DELAY` and
+`PUNKTFUNK_CEDAR_POLL_US`. Those two are not diagnostics: `runtime-env.sh` ships them
+as the port's defaults (`auto` and `5000`), so every A/B above ran without the
+low-delay configuration the port actually installs.
+
+The same build, launched the way the menu launches it (`Punktfunk ZeroCopy` ->
+`Punktfunk.sh` -> `launcher-common.sh`, with `PUNKTFUNK_CEDAR_LOW_DELAY=auto`,
+`PUNKTFUNK_CEDAR_POLL_US=5000` and `PUNKTFUNK_CEDAR_ZEROCOPY=1`), streamed 720p60 for
+eight minutes:
+
+| | harness runs (LOW_DELAY cleared) | menu launch (shipped defaults) |
+| --- | --- | --- |
+| decode-inclusive (receive -> decoded) | 45.5-46.6 ms | **2.92 ms** (p95 2.99) |
+| capture-to-presentation | 59.1-61.6 ms | **8.98 ms** (p95 9.80) |
+| display | 8.3-9.8 ms | **1.16 ms** |
+| decoded / presented | 60.0 / 60.0 FPS | 60 / 60 FPS |
+| frames | ~4200 per 75 s | 29701, `empties=0 errors=0` |
+| lost / skipped | 0 / 0 | 0 / 0 |
+
+Zero-copy was active in that run and it can be shown without debug logging: the session
+process holds 72 `dmabuf` file descriptors, which is the presenter's per-slot imports of
+the vendor planes (14 FBM slots x 3 planes, plus dups). The presenter's
+`native_zero_copy=(0, 0)` counter is about scanout, not about this import, and stays
+zero either way - do not read it as "no zero-copy".
+
+So both hypotheses that survived the earlier sections - a FrameChannel backlog and a
+stalled hand-off - were wrong. With the shipped defaults the client decodes 720p60 at
+2.92 ms with zero-copy on, against 4.55 ms for the copy path measured before it. The
+harness A/B still shows the mechanism (removing the copy removes ~0.7-0.8 ms of the
+decode call), but it must not be used for absolute latency numbers, because it changes
+the configuration under test.
