@@ -553,3 +553,56 @@ Probe note for the next ctypes run on this device: the driver pads
 pre-filled with 0xAA comes back written at 0..291 and 296..819). Read at the spec's
 292 and every limit is shifted by one `uint32`, which reads as nonsense
 (`maxImageDimension1D` = 0, `maxPushConstantsSize` = 268435456).
+
+### Zero-copy on the device: the import works
+
+Build `2aacc46` installed on TSPS (`bin/punktfunk-session` sha256
+`9597b1796b924853ffda57de5b1a0832fb54185235514d3c39a1b650de0e41f6`, `bin/punktfunk`
+unchanged at `94cc24c26736e3963b82d28895d95d114ac244dfb7c37a200318c89f0abfd69b`,
+backup `/mnt/UDISK/punktfunk-backup-20261007-044317.tar.gz`), launched through the
+ordinary Spruce principal flow, 90 s, 720p60:
+
+- `decoder=native-cedar` throughout, no `hardware present failed`, no demotion to
+  software, `session_exit=0`, `lost 0`, `skipped 0`, lag census all zero.
+- The zero-copy handover ran: 4221 `picture handed to the presenter as a dma-buf`
+  lines, and the release counter kept up — `released=4200 peak_held=3 still_held=1`
+  at the end. No `NO_FRAME_BUFFER`, no `ReturnPicture refused`.
+- A real KMS capture (`kmsgrab`) mid-stream shows a correct picture with correct
+  colours, so the three planes are read from the right offsets and the CSC order
+  (Y, Cb, Cr) is right. The chroma planes are not swapped or mirrored.
+
+One-axis A/B on the same scene, same day, both with `PUNKTFUNK_CEDAR_PROFILE=1`:
+
+| | copy (default) | `PUNKTFUNK_CEDAR_ZEROCOPY=1` |
+| --- | --- | --- |
+| stage 2 whole decode call | 3363 us | **2578 us** |
+| stage 4 picture copy | 731 us | **0 (not taken)** |
+| stage 7 drain frame arm | 3277 us | **2494 us** |
+| decode-inclusive (receive -> decoded) | 46.6 ms | 45.5 ms |
+| capture-to-presentation | 61.6 ms | 59.1 ms |
+| received / decoded / presented | 60.0 / 60.0 / 60.0 FPS | 60.0 / 60.0 / 60.0 FPS |
+
+So the copy is gone and the decode call is ~0.8 ms cheaper, which is a little more
+than the 0.9 ms the copy itself cost.
+
+### Open: the ~43 ms in front of the decoder
+
+The numbers above are 5x the latency this document recorded earlier (decode 4.55 ms,
+capture-to-presentation 12.1 ms), and the gap is not in the decode work: the census
+puts the whole decode call at 2.6-3.4 ms while the client's decode-inclusive metric
+(receive -> decoded) sits at ~46 ms. That is a queue of about 2.5 frames in front of
+the decoder.
+
+It is not this change. Three controls, all at ~46.6 ms decode-inclusive:
+
+- the copy path with the previous presenter binary (`bin/punktfunk-session` sha256
+  `8a5f0e48...`, the `9e66880` build) restored for one run: 46.6 ms, stage 2 3362 us;
+- the client's UDP receive buffer is not the cause: raising `net.core.rmem_max` from
+  212992 to 4194304 changed the same run's number from 46.6 to 46.6 ms (the setting was
+  reverted afterwards);
+- `bin/punktfunk` is byte-identical to the pre-change install, so the client's receive
+  and decode scheduling is unchanged.
+
+What is left to look at is the receive-to-decode hand-off itself (client AU pump versus
+host send cadence), and it dominates today's end-to-end latency far more than the
+0.9 ms copy does. Worth its own measurement before more decode work.
