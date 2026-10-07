@@ -26,7 +26,17 @@ class PresenterRefuseImport(unittest.TestCase):
         """
         module = load()
         applied = dict((label, new) for label, old, new in module.EDITS)
-        arm = applied['refuse hook in the dmabuf arm']
+        # The guarded arm is the one a device with a working import takes: a hook in
+        # the no-import arm alone installs cleanly and never fires (measured).
+        self.assertEqual([label for label, _, _ in module.EDITS][0],
+                         'refuse hook in the presenting dmabuf arm')
+        presenting = applied['refuse hook in the presenting dmabuf arm']
+        self.assertIn('presenter.supports_dmabuf()', presenting)
+        self.assertIn('if refuse_import() {', presenting)
+        self.assertIn('return Ok(false);', presenting)
+        self.assertLess(presenting.index('if refuse_import() {'),
+                        presenting.index('self.hdr = d.color.is_pq();'))
+        arm = applied['refuse hook in the no-import arm']
         self.assertIn('if refuse_import() {', arm)
         self.assertIn('self.force_software.store(true, Ordering::Relaxed);', arm)
         self.assertIn('return Ok(false);', arm)
@@ -58,7 +68,7 @@ class PresenterRefuseImport(unittest.TestCase):
                 else:
                     self.assertEqual(result.returncode, 0, result.stderr)
                     self.assertEqual(path.read_text().count('fn refuse_import() -> bool'), 1)
-                    self.assertEqual(path.read_text().count('if refuse_import() {'), 1)
+                    self.assertEqual(path.read_text().count('if refuse_import() {'), 2)
 
     def test_the_hook_ships_in_the_presenter_build(self):
         build = (ROOT / 'scripts/build.sh').read_text()
