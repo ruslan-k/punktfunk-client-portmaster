@@ -733,6 +733,20 @@ impl NativeCedarDecoder {
         Some(output.frame)
     }
 
+    /// The presenter refused the imported planes: hand it copies for the rest of the
+    /// session instead of dropping the whole rung. `false` when the hand-off was
+    /// already off, so the caller falls through to its own demotion.
+    pub(crate) fn drop_zerocopy(&mut self) -> bool {
+        if !self.zerocopy {
+            return false;
+        }
+        self.zerocopy = false;
+        tracing::warn!(
+            "cedar: presenter refused the imported planes — zero-copy off, decoding copies"
+        );
+        true
+    }
+
     pub(crate) fn decode(&mut self, au: &[u8]) -> Result<Option<DecodedImage>> {
         self.output_stamp = None;
         let begin = self.profile.as_ref().map(|_| Instant::now());

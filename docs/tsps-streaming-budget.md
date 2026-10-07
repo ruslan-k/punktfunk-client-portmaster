@@ -671,3 +671,27 @@ stalled hand-off - were wrong. With the shipped defaults the client decodes 720p
 harness A/B still shows the mechanism (removing the copy removes ~0.7-0.8 ms of the
 decode call), but it must not be used for absolute latency numbers, because it changes
 the configuration under test.
+
+### Zero-copy ships on, with a rung-local fallback
+
+`PUNKTFUNK_CEDAR_ZEROCOPY` defaults to 1 in `runtime-env.sh`, so the ordinary
+`Punktfunk` menu entry streams zero-copy; `config.env` documents the knob, and `0`
+restores copying. The separate `Punktfunk ZeroCopy` launcher that carried the knob
+during development is gone - one menu entry, and it is the real configuration.
+
+A refused import no longer costs the decoder. `pf-client-core` demoted the whole rung
+to software when the presenter signalled that it could not display a hardware frame
+(`video.rs::force_software`), which is exactly what the first device run did: 720p60
+hardware decode fell to software over one refused plane. The Cedar rung can hand
+copies instead, so the demotion now asks it first:
+
+- `NativeCedarDecoder::drop_zerocopy()` clears `zerocopy` for the session, logs it, and
+  returns `true`; the rung keeps decoding down the packed-copy path it already had.
+- `Decoder::drop_zerocopy()` exposes it to the pump (`#[cfg(target_os = "linux")]`, the
+  same shape as `poll_cedar_ready`).
+- The pump's demotion site calls it before `force_software()`, so only a rung with
+  nothing to drop - or a Cedar stack that is itself broken - reaches software.
+
+Proven so far: creates, imports, binds, a correct picture, 29701 frames with
+`empties=0 errors=0`, and 2.92 ms decode with zero-copy on. Not yet exercised on the
+device: the fallback itself, which needs a run with the import deliberately refused.

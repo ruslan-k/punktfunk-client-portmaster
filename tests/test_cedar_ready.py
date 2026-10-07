@@ -36,3 +36,37 @@ class CedarReadyTests(unittest.TestCase):
         self.assertIn('pub(crate) fn poll_ready',source)
         self.assertIn('output_lag_frames',source)
         self.assertIn('self.output_stamp = output.stamp',source)
+
+    def test_a_refused_import_drops_the_handoff_before_the_rung(self):
+        """A refused dma-buf import is not a dead decoder.
+
+        The presenter signals the pump when it cannot display a hardware frame, and
+        the pump demoted the whole rung to software - which is why an import failure
+        cost 720p60 hardware decode. The Cedar rung can hand copies instead, so the
+        demotion asks it to drop zero-copy first and only falls through when there is
+        nothing to drop.
+        """
+        script=ROOT/'scripts/patch-cedar-ready.py'
+        spec=importlib.util.spec_from_file_location('ready_patch',script)
+        assert spec and spec.loader
+        module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+        edits={name:dict(edits) for name,edits in
+               [('video.rs',module.VIDEO_EDITS),('session.rs',module.SESSION_EDITS)]}
+        session=edits['session.rs']
+        demote=next(old for old in session if 'force_software.swap(false' in old)
+        applied=session[demote]
+        self.assertIn('if decoder.drop_zerocopy()',applied)
+        self.assertLess(applied.index('decoder.drop_zerocopy()'),applied.index('force_software()'))
+        video=edits['video.rs']
+        drop=next(old for old in video if 'cannot display hardware frames' in old)
+        applied_video=video[drop]
+        self.assertIn('pub fn drop_zerocopy(&mut self) -> bool',applied_video)
+        self.assertIn('if let Backend::NativeCedar(c) = &mut self.backend {',applied_video)
+        self.assertIn('return c.drop_zerocopy();',applied_video)
+        source=(ROOT/'patches/video_cedar.rs').read_text()
+        self.assertIn('pub(crate) fn drop_zerocopy(&mut self) -> bool',source)
+        self.assertIn('self.zerocopy = false;',source)
+        env=(ROOT/'package/punktfunk/runtime-env.sh').read_text()
+        self.assertIn('export PUNKTFUNK_CEDAR_ZEROCOPY=${PUNKTFUNK_CEDAR_ZEROCOPY:-1}',env)
+        cfg=(ROOT/'package/punktfunk/config.env').read_text()
+        self.assertIn('#PUNKTFUNK_CEDAR_ZEROCOPY=1',cfg)

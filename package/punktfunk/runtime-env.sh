@@ -115,6 +115,11 @@ export PUNKTFUNK_DECODER=${PUNKTFUNK_DECODER:-native-cedar}
 # planner-verified progressive zero-reorder stream. Otherwise keep the baseline.
 export PUNKTFUNK_CEDAR_LOW_DELAY=${PUNKTFUNK_CEDAR_LOW_DELAY:-auto}
 export PUNKTFUNK_CEDAR_POLL_US=${PUNKTFUNK_CEDAR_POLL_US:-5000}
+# Zero-copy presenter hand-off: the Cedar rung gives the presenter the vendor's
+# own dma-buf planes instead of copying them. A refused import drops the rung
+# back to the packed copy for the session (`drop_zerocopy`); only a broken
+# Cedar stack falls further, to software. 0 restores copying.
+export PUNKTFUNK_CEDAR_ZEROCOPY=${PUNKTFUNK_CEDAR_ZEROCOPY:-1}
 export RUST_LOG=${RUST_LOG:-info}
 
 if [ -n "${sdl_controllerconfig:-}" ]; then
