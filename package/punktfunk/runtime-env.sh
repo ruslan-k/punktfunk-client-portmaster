@@ -120,13 +120,16 @@ export PUNKTFUNK_CEDAR_POLL_US=${PUNKTFUNK_CEDAR_POLL_US:-5000}
 # back to the packed copy for the session (`drop_zerocopy`); only a broken
 # Cedar stack falls further, to software. 0 restores copying.
 export PUNKTFUNK_CEDAR_ZEROCOPY=${PUNKTFUNK_CEDAR_ZEROCOPY:-1}
-# Test hook (docs/tsps-streaming-budget.md): make the presenter refuse imported
-# dma-buf frames so the drop-zerocopy fallback is exercised. `config.env` is only
-# sourced, so a knob without this re-export never reaches the process. Off unless
-# set in config.env.
-if [ -n "${PUNKTFUNK_CEDAR_REFUSE_IMPORT:-}" ]; then
-  export PUNKTFUNK_CEDAR_REFUSE_IMPORT
-fi
+# `config.env` is sourced, not exported, so every PUNKTFUNK_* knob it sets has to be
+# forwarded here or it silently does nothing. That trap cost two device runs: a test
+# hook that installed cleanly and never fired, and a phase census that never printed.
+# Read the names back out of the file (the values are already in the shell) and export
+# them; the redirect keeps the loop in this shell, a pipe would export into a subshell.
+while IFS='=' read -r _name _value; do
+  case "$_name" in
+    PUNKTFUNK_*) export "$_name" ;;
+  esac
+done < "$CONFIG"
 export RUST_LOG=${RUST_LOG:-info}
 
 if [ -n "${sdl_controllerconfig:-}" ]; then

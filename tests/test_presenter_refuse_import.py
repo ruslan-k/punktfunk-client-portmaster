@@ -70,18 +70,25 @@ class PresenterRefuseImport(unittest.TestCase):
                     self.assertEqual(path.read_text().count('fn refuse_import() -> bool'), 1)
                     self.assertEqual(path.read_text().count('if refuse_import() {'), 2)
 
-    def test_the_hook_can_actually_reach_the_session(self):
+    def test_config_env_knobs_actually_reach_the_session(self):
         """`config.env` is sourced, not exported.
 
-        A plain `PUNKTFUNK_CEDAR_REFUSE_IMPORT=1` line there stays a shell variable in
-        the launcher and the process never sees it - measured, twice, as a hook that
-        installed cleanly and never fired. Every other knob works because
-        `runtime-env.sh` re-exports it explicitly.
+        Every PUNKTFUNK_* knob has to be forwarded explicitly or it silently does
+        nothing. That cost two device runs - a test hook that installed cleanly and
+        never fired, and a phase census that never printed - so the forwarding is a
+        rule over the whole file rather than one line per knob.
         """
         env = (ROOT / 'package/punktfunk/runtime-env.sh').read_text()
-        self.assertIn('if [ -n "${PUNKTFUNK_CEDAR_REFUSE_IMPORT:-}" ]; then', env)
-        self.assertIn('export PUNKTFUNK_CEDAR_REFUSE_IMPORT\n', env)
-        self.assertNotIn('export PUNKTFUNK_CEDAR_REFUSE_IMPORT=${', env)
+        self.assertIn("while IFS='=' read -r _name _value; do", env)
+        self.assertIn('PUNKTFUNK_*) export "$_name" ;;', env)
+        # A pipe would run the loop in a subshell and export nothing.
+        self.assertIn('done < "$CONFIG"', env)
+        self.assertNotIn('done < <(', env)
+        self.assertLess(env.index('source "$CONFIG"'), env.index('PUNKTFUNK_*) export'))
+        # The census knob is documented where a user edits knobs, and the rung reads it.
+        self.assertIn('PUNKTFUNK_CEDAR_PROFILE',
+                      (ROOT / 'package/punktfunk/config.env').read_text())
+        self.assertIn('PUNKTFUNK_CEDAR_PROFILE', (ROOT / 'patches/video_cedar.rs').read_text())
 
     def test_the_hook_ships_in_the_presenter_build(self):
         build = (ROOT / 'scripts/build.sh').read_text()
