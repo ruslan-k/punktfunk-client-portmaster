@@ -72,3 +72,18 @@ fn bounded_ledger_refuses_growth_and_reuses_retired_capacity() {
     p.insert(129, 129).unwrap();
     assert_eq!(p.take(129), Some(129));
 }
+
+#[test]
+fn a_holey_window_still_matches_every_token_exactly() {
+    let mut p = PtsLedger::default();
+    for i in 1..=128 { p.insert(i, i).unwrap(); }
+    // Retire the odd half in reverse order: the window is now full of holes.
+    for i in (1..=128).step_by(2).rev() { assert_eq!(p.take(i), Some(i)); }
+    assert_eq!(p.len(), 64);
+    // Every remaining token is still exactly where it was put.
+    for i in (2..=128).step_by(2) { assert_eq!(p.take(i), Some(i)); }
+    assert_eq!(p.len(), 0);
+    // And the capacity those takes retired is reusable.
+    p.insert(999, 999).unwrap();
+    assert_eq!(p.take(999), Some(999));
+}

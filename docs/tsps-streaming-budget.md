@@ -915,3 +915,31 @@ rather than a desktop scene; and only then an allocation-free Cedar cleanup
 Vec -> fixed array). The `PUNKTFUNK_CEDAR_REFUSE_IMPORT` hook is not a hot-path cost -
 it reads the environment once through a `OnceLock` - so removing it is tidiness, not
 performance.
+
+## Allocation-free cleanup: the ledger and the held map
+
+Two per-frame container changes, no behaviour change, contract unchanged (the existing
+`cedar_pts_tests.rs` contract is what they were written against, plus a new test for a
+window with holes):
+
+- `PtsLedger` was a `BTreeMap<i64, T>`: one node allocated per submit and freed per take
+  - a malloc/free pair per frame in the drain's hot path. It is now a fixed array of 128
+  slots (`PTS_SLOTS`, the historical limit): a submit writes a free slot, a take scans
+  for the key, a retired slot is reused. Same semantics: nonpositive and duplicate
+  submits refused, the 128 limit enforced, arbitrary take order.
+- `held` was a `HashMap<u64, *mut VideoPicture>`. The pool is ~14 buffers and the peak
+  held is a handful, so hashing bought nothing: it is now a short `Vec` with a linear
+  scan (replace on a re-issued token, exactly as the map did).
+
+Not done, and why: `DmabufFrame.planes` is `Vec<DmabufPlane>` in upstream
+`pf-client-core`, consumed by the presenter and the other importers. A fixed array does
+not express a packed single-plane frame without an accompanying count, so the change is
+a cross-crate API change for one small allocation per frame. Measured context: the
+handoff's other two candidates are already free - `sync_fds` is an empty `Vec` (no
+allocation) and the guard is an inline enum variant (no box). So `planes` is the last
+allocation in the path and it is worth ~0.1 us/frame, which is below this device's
+measurement floor.
+
+Expected effect of both changes: not mean latency but allocation jitter, so the thing to
+watch is the decode tail (p95/p99), not p50.
+
