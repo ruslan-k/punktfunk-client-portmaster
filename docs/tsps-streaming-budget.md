@@ -788,10 +788,27 @@ In the 0 us arm the run changed regime ~65 s in: display 1.1 -> 26.6 ms, e2e
 8.8 -> 34.8 ms, stable afterwards, while the decode census stayed identical
 (stage 6 39.8 us, stage 10 0.1 us, whole decode 2617 us, vendor unchanged) and every
 presenter field stayed identical (submit 71 us, fence 16 us, present 48 us,
-jitter 0, late 0, misses 0). The client logged `quinn_udp: sendmsg error: Os { code: 5,
-Input/output error }` and `halting segmentation offload` at 12:35:59 and 12:36:09, just
-before the step. So the added latency is in the client's Wi-Fi path, not in our code.
-That makes the link (power save is on) the next thing to measure.
+jitter 0, late 0, misses 0).
+
+**The first reading of this was wrong and is corrected here.** I first blamed the
+client's Wi-Fi, because `quinn_udp: sendmsg error: Os { code: 5, Input/output error }` /
+`halting segmentation offload` appeared just before the step. Two later runs disproved
+that: those lines are a constant background every ~10 s in *both* power-save states, and
+the step itself appeared in exactly one of four arms:
+
+| arm | step? |
+|---|---|
+| retry 200, power save on | no |
+| retry 50, power save on | no |
+| **retry 0, power save on** | **yes (display 26.6 / e2e 34.8)** |
+| retry 50, power save off | no |
+
+So the step tracks `retry_us=0`, not the link: a tight poll runs ~27 vendor calls per
+frame in the drain and the presenter's queue ends up about 1.5 frames deep (its own
+durations stay identical - submit 71, fence 16, present 48 - while `display`, which is
+arrival to present, grows). That is the second independent reason the default is 50 and
+not 0. Turning Wi-Fi power save off showed no measurable benefit either (arrival p50
+16.75 ms against 16.73-16.81 with it on), so the device was left stock.
 
 ## Host side: the encode clock sag (measured, -1.08 ms end to end)
 
@@ -850,3 +867,51 @@ path (power save made no measurable difference) and the host encode (VCN at 20% 
 it is the ASIC's per-frame latency, not saturation) — further gains there would trade
 picture quality, which is out of scope.
 
+## Host video clocks (VCN) under the pin: closed
+
+The pin raised SCLK, but AMD has separate video domains, so the next question was whether
+the encoder's own clocks were still sagging. The nodes exist on this box
+(`/sys/class/drm/card1/device/pp_dpm_vclk`, `pp_dpm_dclk`), and during a pinned stream
+they read:
+
+```
+SCLK 2200/2200   VCLK 1440/1440 (level 7 of 8)   DCLK 1028/1028 (level 7 of 8)   VCN load 19-20%
+```
+
+Stable across samples, both at their top level. So there is no second clock axis left to
+pin: the host encode is already running on full clocks, and VCN at ~20% load says it is
+the ASIC's per-frame latency, not saturation. Host encode is closed at ~1.8 ms.
+
+## The budget as the client reports it
+
+The client's own stats window carries the split, so the budget can be closed without
+touching the host: `net` (one way), `host_encode`, `decode`, `display`, plus `rtt_us`.
+A 25-window run with the pin on:
+
+| window | e2e p50 / p95 / p99 | net p50 | host_encode p50 | decode p50 | display p50 | rtt |
+|---|---|---|---|---|---|---|
+| 2-24 (median) | 8.25 / 9.02 / 9.35 | 2.30 | 1.85 | 2.58 | 1.15 | 3.8 |
+
+8.25 ms measured against net 2.30 + host_encode 1.85 + decode 2.58 + display 1.15 +
+host submit/send ~0.35 = 8.23 ms. The tail is tight: p95 stayed 8.8-9.7 and p99 9.2-11.1
+for 23 of 25 windows, with the exceptions being the bring-up window (p99 48 ms) and two
+isolated windows (p99 21 ms, and one at p95 18.4). No sustained step.
+
+## Production baseline
+
+Fixed unless a measurement shows a specific problem:
+
+```
+1280x720 @ 60
+client: native Cedar, LOW_DELAY=auto, POLL_US=5000, RETRY_US=50, FAST_PLAN=1, ZEROCOPY=1
+        zero-copy import failure -> Cedar packed copy -> software only on real breakage
+host:   PUNKTFUNK_PIN_CLOCKS=1
+```
+
+Open (optional, in order): a long soak for the rare tails (p99 spikes of 18-21 ms exist
+in isolated windows) with RSSI/retransmit/quinn-error counters alongside e2e; real games
+rather than a desktop scene; and only then an allocation-free Cedar cleanup
+(`PtsLedger` BTreeMap -> ring, `held` HashMap -> fixed slots, `DmabufFrame.planes`
+Vec -> fixed array). The `PUNKTFUNK_CEDAR_REFUSE_IMPORT` hook is not a hot-path cost -
+it reads the environment once through a `OnceLock` - so removing it is tidiness, not
+performance.
