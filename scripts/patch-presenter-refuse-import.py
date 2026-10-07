@@ -9,7 +9,7 @@ unexercised. The hook takes the same path the presenter already takes when it ha
 no import support - `force_software.store(true)` and `Ok(false)` - so the pump side
 is not being tested through a private door.
 
-Off unless the variable is set; read once.
+Off unless the variable is set; read once. It says so in the log.
 """
 import pathlib
 import sys
@@ -22,6 +22,9 @@ ARM_NEW = """            DecodedImage::NativeDmabuf(_) => {
                 // Test hook: refuse a frame the import path could have taken, so the
                 // pump's drop-zerocopy fallback is reachable on a healthy device.
                 if refuse_import() {
+                    tracing::warn!(
+                        "PUNKTFUNK_CEDAR_REFUSE_IMPORT: refusing an imported dma-buf frame"
+                    );
                     self.force_software.store(true, Ordering::Relaxed);
                     return Ok(false);
                 }

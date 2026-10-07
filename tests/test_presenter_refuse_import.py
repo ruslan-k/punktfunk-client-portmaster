@@ -30,6 +30,7 @@ class PresenterRefuseImport(unittest.TestCase):
         self.assertIn('if refuse_import() {', arm)
         self.assertIn('self.force_software.store(true, Ordering::Relaxed);', arm)
         self.assertIn('return Ok(false);', arm)
+        self.assertIn('PUNKTFUNK_CEDAR_REFUSE_IMPORT: refusing an imported dma-buf frame', arm)
         self.assertLess(arm.index('if refuse_import() {'),
                         arm.index('// No import extensions'))
         helper = applied['the hook helper']
