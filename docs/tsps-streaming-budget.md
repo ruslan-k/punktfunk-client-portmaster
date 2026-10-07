@@ -792,3 +792,61 @@ jitter 0, late 0, misses 0). The client logged `quinn_udp: sendmsg error: Os { c
 Input/output error }` and `halting segmentation offload` at 12:35:59 and 12:36:09, just
 before the step. So the added latency is in the client's Wi-Fi path, not in our code.
 That makes the link (power save is on) the next thing to measure.
+
+## Host side: the encode clock sag (measured, -1.08 ms end to end)
+
+The client was measured to its floor, so the next step was the host. The host runs on
+the same box (minisforum: `punktfunk-host` user unit + a managed nested gamescope on
+HDMI-A-1, VAAPI H264 1280x720@60). It has its own per-stage recorder — `punktfunk-host
+ctl stats record start|stop`, samples in `~/.config/punktfunk/captures/`, and it needs
+no `PUNKTFUNK_PERF` (`let measure = self.perf || self.stats.is_armed()`). Stage names for
+the Linux native path, from the code: `queue = delivery->submit`, `capture =
+try_latest(ring+convert)`, `submit = encode_picture`, `encode = lock_bitstream(sched+ASIC)`,
+`send = pace`, plus `host_p50/p99_us` and `rtt_us`.
+
+First recording closed the whole budget against the client's own stats from the same run:
+
+| stage | ms | share |
+|---|---|---|
+| host encode | 2.50 | 27% |
+| network, one way (rtt 4.54 / 2) | 2.27 | 24% |
+| client decode | 2.63 | 28% |
+| client display | 1.22 | 13% |
+| host submit + send | 0.40 | 4% |
+| host queue + capture | ~0 | 0% |
+| **sum** | **9.06** | |
+
+The client measured e2e 9.34 ms in that window, so the decomposition closes to 3%.
+
+**The finding: the GPU sat at 400 MHz of 2200 during the stream.** Live: `SCLK 400 MHz`,
+`MCLK 800 MHz`, `VCN Load 9%`, `GPU Load 0%`, 7.18 W. The encode is a 2.5 ms burst per
+frame, so amdgpu's DPM never ramps. The host has the mechanism for exactly this:
+`PUNKTFUNK_PIN_CLOCKS` (`linux/gpuclocks.rs`, "encode clock sag removed", refcounted,
+restores the previous level when the last client disconnects). It writes
+`power_dpm_force_performance_level`, which normally needs root — here the attribute is
+world-writable (666), so the user unit writes it itself.
+
+Applied as `PUNKTFUNK_PIN_CLOCKS=1` in `~/.config/punktfunk/host.env` (the unit's
+`EnvironmentFile`), host restarted. Same client build, same stream, same codec and
+bitrate — only the clocks changed:
+
+| | unpinned | pinned |
+|---|---|---|
+| SCLK | 400 MHz | 2200 MHz |
+| host encode p50 | 2499 us | **1587 us** (-36%) |
+| host_p50 | 2942 us | **2143 us** (-27%) |
+| host_p99 | 5620 us | **2663 us** (-53%) |
+| client decode median | 2.615 ms | 2.622 ms (unchanged) |
+| **client e2e median** | **9.36 ms** | **8.28 ms** (-1.08, -11.5%) |
+| rtt | 4.54 ms | 4.40 ms (so the network is not the delta) |
+
+Quality is untouched: same encoder, codec, resolution, bitrate. The pin auto-restored
+after the session ("amdgpu performance level restored"), so it only applies while
+streaming.
+
+Budget after the pin: host_p50 2.14 + network 2.20 + client decode 2.62 + display 1.17
+= 8.13 ms against a measured 8.28 ms. What is left is the VPU floor (2.33 ms), the Wi-Fi
+path (power save made no measurable difference) and the host encode (VCN at 20% load, so
+it is the ASIC's per-frame latency, not saturation) — further gains there would trade
+picture quality, which is out of scope.
+
