@@ -70,6 +70,19 @@ class PresenterRefuseImport(unittest.TestCase):
                     self.assertEqual(path.read_text().count('fn refuse_import() -> bool'), 1)
                     self.assertEqual(path.read_text().count('if refuse_import() {'), 2)
 
+    def test_the_hook_can_actually_reach_the_session(self):
+        """`config.env` is sourced, not exported.
+
+        A plain `PUNKTFUNK_CEDAR_REFUSE_IMPORT=1` line there stays a shell variable in
+        the launcher and the process never sees it - measured, twice, as a hook that
+        installed cleanly and never fired. Every other knob works because
+        `runtime-env.sh` re-exports it explicitly.
+        """
+        env = (ROOT / 'package/punktfunk/runtime-env.sh').read_text()
+        self.assertIn('if [ -n "${PUNKTFUNK_CEDAR_REFUSE_IMPORT:-}" ]; then', env)
+        self.assertIn('export PUNKTFUNK_CEDAR_REFUSE_IMPORT\n', env)
+        self.assertNotIn('export PUNKTFUNK_CEDAR_REFUSE_IMPORT=${', env)
+
     def test_the_hook_ships_in_the_presenter_build(self):
         build = (ROOT / 'scripts/build.sh').read_text()
         self.assertLess(build.index('patch-presenter-planar.py'),
