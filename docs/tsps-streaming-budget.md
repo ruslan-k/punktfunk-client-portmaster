@@ -1037,3 +1037,36 @@ attributable unless the arms are interleaved in one sitting - and the container 
 above stands on "no demonstrated benefit plus simpler code", not on the separation that
 was measured that day. Treat the decode p50 as scene-dependent by about +-0.1 ms.
 
+## Wi-Fi power save is not the tail (A/B on the right endpoint)
+
+Two 22-minute soaks on a real game, one per power-save state, same client build, matched
+scenes (`Mbps` 3.36 against 3.35), same link (zero `rx_crc`/`rx_missed`/`rx_err`/`tx_*`
+deltas in both). The endpoint is the tail, because p50/p95 cannot see this axis:
+
+| endpoint | `power_save=on` | `power_save=off` |
+|---|---|---|
+| windows | 1365 (22.8 min) | 1329 (22.1 min) |
+| `net` p50 / p95 / p99 | 2.26 / 2.54 / 2.88 ms | 2.16 / 2.47 / 2.85 ms |
+| windows with `net p99 > 8 ms` | **1.83%** | **1.96%** |
+| `net p99` > 15 ms | 0.07% | 0.31% |
+
+The `net p99` bucket distribution is the same shape in both arms (0-3 ms: 58.9% vs
+61.6%). Power save does not cause the tail - if anything the off arm is marginally worse
+in the far tail - so the device is back on stock. The axis the earlier p50/p95 test could
+not see is now measured on the correct endpoint and still moves nothing.
+
+## The host's pipeline queue moved 4 ms between sessions
+
+In the second soak the client's `host_queue` (the host's `delivery -> submit`) read
+p50/p99 4.08/4.16 ms against 0.06/0.11 in the first, and that went straight into the e2e
+(12.17 against 8.27) while `net`, `decode`, `display`, `host_encode` and `host_pace` were
+identical. It is a host-side property - the client's Wi-Fi cannot reach the host's
+internal pipeline - so the two runs' *absolute* e2e is not comparable, only their
+network-side endpoints are.
+
+Two consequences. The `host_queue` figure in the budget is session-dependent, so a
+comparison that shows a step should check it before blaming the leg under test. And it is
+now the largest single remaining latency term, larger than anything left on the client,
+which makes it the next thing worth measuring: what sets that depth (the capture/encoder
+pipeline, `slots=8`, `PUNKTFUNK_FRAME_DRIVEN`, or the game's own frame pacing).
+
