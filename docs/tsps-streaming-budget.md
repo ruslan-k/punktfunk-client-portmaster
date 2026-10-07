@@ -718,3 +718,40 @@ Two runs close what is left:
    refused the imported planes - decoding copies`, the rung must stay `native-cedar`
    with no `demoting to software`, and the decode call should return to the copy-path
    cost (~0.7-0.8 ms more) while the picture stays correct.
+
+### The fallback, verified on the device
+
+`PUNKTFUNK_CEDAR_REFUSE_IMPORT=1` with `RUST_LOG=info,cedar=debug`, build `47c37b9`,
+log `punktfunk-20261007-112620-4397`:
+
+1. `picture handed to the presenter as a dma-buf token=1` - zero-copy running.
+2. `PUNKTFUNK_CEDAR_REFUSE_IMPORT: refusing an imported dma-buf frame` - the presenter
+   refuses.
+3. `cedar: presenter refused the imported planes - zero-copy off, decoding copies` - the
+   rung drops the hand-off.
+4. `first picture decoded (vendor format copied directly to packed I420)` - the rung
+   stays on Cedar and switches to the packed copy.
+5. No `demoting to software decode` and no `software decoder opened`: the decoder stayed
+   `native-cedar` for the whole run, which is the point of the fallback.
+6. `decode` 3.26 ms (p50 3.25, p95 3.48) against 2.75 ms with the hand-off - the copy
+   cost, as predicted. `lost 0`, `skipped 0`, `empties=0 errors=0`, `pts_matches=3922
+   pts_unmatched=0 pts_outstanding=0`, `output_lag_frames=[3922, 0, 0, 0, 0]` (bucket 0
+   is the one-in-one-out signature under `LOW_DELAY=auto`; the older copy-path run that
+   booked lag in buckets 2-3 had the low-delay mode cleared by the harness).
+
+Three defects had to be fixed to get there, and two were in the test rig rather than the
+port:
+
+- the hook sat in the unguarded dmabuf arm, which a device with a working import never
+  takes: it installed cleanly, looked right, and never fired;
+- `config.env` is *sourced*, not exported, so a knob without a `runtime-env.sh`
+  re-export stays a shell variable in the launcher and never reaches the process. Every
+  other knob works only because `runtime-env.sh` re-exports it explicitly;
+- the fallback itself was half-effective: the presenter signals once per refused frame,
+  so the second signal - about a frame already in flight - found nothing left to drop
+  and demoted the decoder to software (openh264) anyway. The rung now records that the
+  refusal was its own and absorbs later ones, because demoting cannot fix a refusal the
+  copies already answer.
+
+The hold and release path is also verified at debug level: 8411 pictures handed over and
+8411 returned, `ReturnPicture refused` zero, `peak_held=3`, steady `still_held=1`.
