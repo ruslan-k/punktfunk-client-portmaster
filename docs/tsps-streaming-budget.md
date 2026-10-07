@@ -992,3 +992,48 @@ measurement floor.
 Expected effect of both changes: not mean latency but allocation jitter, so the thing to
 watch is the decode tail (p95/p99), not p50.
 
+## The soak: the tails are the one-way network leg
+
+682 windows / 11.4 min of a real game (moving scene), `PUNKTFUNK_PERF=1` for the arrival
+line, plus a 5-second link sampler on the device (signal + netdev error counters - this
+driver has no station dump and no `/proc/net/wireless`, so tx retries are simply not
+available and were not invented).
+
+Headline: `e2e` p50 median 8.36, p95 9.04, p99 9.20; `decode` p50 2.66 (a moving scene
+costs ~0.1 ms more than a static desktop), p99 2.83; `display` p99 1.81; lost 0,
+skipped 6. Arrival p50 16.70-16.74 ms, `late=0`.
+
+12 of 682 windows (1.8%, roughly one a minute) had `e2e` p99 above 15 ms. What those
+windows look like against the normal ones:
+
+| metric (median) | normal windows | slow windows |
+|---|---|---|
+| `net` p99 | 2.96 ms | **10.30 ms** |
+| `decode` p99 | 2.83 ms | 2.75-5.26 ms (normal) |
+| `display` p99 | 1.81 ms | 1.75-4.00 ms (normal) |
+| `host_encode` p50 | 1.83 ms | 1.83 ms (identical) |
+| `host_encode` p99 | 2.21 ms | 2.36 ms |
+| `host_queue` p99 | 0.11 ms | 0.13 ms |
+| `host_pace` p99 | 0.31 ms | 0.30 ms |
+
+So the tail is the network's own p99: the client decodes and presents normally, the host
+encodes and paces normally, and the frame arrives late. The link counters over the whole
+soak: `rx_crc` 0, `rx_missed` 0, `rx_err` 0, `tx_err` 0, `tx_aborted` 0, `tx_dropped` 0,
+`rx_dropped` +76 against ~1.5M packets, signal -30..-40 dBm, and the host's `link health`
+reported `loss_max_pct 0.00` with `unrecovered 0`. **Latency without loss or corruption**:
+the frame is late, not damaged and not missing. Ten of the twelve windows were pure
+network; two also carried a host-side component (`host_encode` p99 9.2 and 26.3 ms).
+
+The endpoint for any fix is therefore the tail rate (`net p99`, and the count of windows
+with `e2e p99 > 15 ms`), not p50/p95. The earlier Wi-Fi power-save test compared p50/p95
+and saw nothing move, which is exactly why it could not see this axis - that A/B deserves
+a rerun with the tail as the endpoint.
+
+### A run-to-run spread that invalidates small cross-run comparisons
+
+The same client build measured `decode` p50 2.56 on a static desktop and 2.66 on this
+moving game. A 0.1 ms difference between two runs of *different* builds is therefore not
+attributable unless the arms are interleaved in one sitting - and the container revert
+above stands on "no demonstrated benefit plus simpler code", not on the separation that
+was measured that day. Treat the decode p50 as scene-dependent by about +-0.1 ms.
+
