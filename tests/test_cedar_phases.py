@@ -20,6 +20,13 @@ class CedarPhaseTests(unittest.TestCase):
         self.assertIn('DrainStep::Again', src)
         self.assertIn('profile.note_stage(6, elapsed_us(body_begin))', src)
         self.assertIn('profile.note_stage(7, elapsed_us(drain_begin))', src)
+        # The retry backoff sits inside the drain body but outside the arm timers:
+        # without its own column a measured 0.26 ms/frame read as unattributed.
+        self.assertIn('profile.note_stage(10, elapsed_us(sleep_begin))', src)
+        self.assertIn('Duration::from_micros(self.retry_us)', src)
+        phases = (ROOT / 'patches/cedar_phases.rs').read_text()
+        self.assertIn('pub stage_n: [u64; 11],', phases)
+        self.assertIn('10 is the', phases)
 
     def test_fifo_default_has_explicit_baseline_control_and_is_bounded(self):
         src = (ROOT / 'patches/video_cedar.rs').read_text()

@@ -554,6 +554,8 @@ pub(crate) struct NativeCedarDecoder {
     immediate_handoff: bool,
     drop_b_delay: c_int,
     poll_budget_us: u64,
+    /// Backoff between drain retries; see `CedarTuning::retry_us`.
+    retry_us: u64,
     append_aud: bool,
     low_delay: bool,
     zero_reorder_verified: bool,
@@ -676,6 +678,7 @@ impl NativeCedarDecoder {
             immediate_handoff: std::env::var("PUNKTFUNK_CEDAR_HANDOFF").as_deref() == Ok("1"),
             drop_b_delay: 0,
             poll_budget_us: 0,
+            retry_us: 200,
             append_aud: false,
             low_delay: false,
             zero_reorder_verified: false,
@@ -994,6 +997,7 @@ impl NativeCedarDecoder {
         let tune = CedarTuning::from_lookup(|k| std::env::var(k).ok()).map_err(|e| anyhow!(e))?;
         self.drop_b_delay = tune.drop_b_delay;
         self.poll_budget_us = tune.poll_budget_us as u64;
+        self.retry_us = tune.retry_us as u64;
         self.append_aud = tune.append_aud == 1;
         if tune.low_delay != 0 {
             let vendor_ok = std::fs::read("/usr/lib/libawh264.so").ok()
@@ -1039,7 +1043,8 @@ impl NativeCedarDecoder {
         tracing::info!(target: "cedar", low_delay = self.low_delay, no_b_frames = tune.no_b_frames,
             frame_package = tune.frame_package, smooth = tune.smooth, display = tune.display,
             drop_b_delay = tune.drop_b_delay, immediate_handoff = self.immediate_handoff,
-            poll_us = tune.poll_budget_us, append_aud = self.append_aud,
+            poll_us = tune.poll_budget_us, retry_us = tune.retry_us,
+            append_aud = self.append_aud,
             ve_freq_mhz = tune.ve_freq_mhz, pixfmt = tune.pixfmt, copy_twice = tune.copy_twice,
             "cedar: candidate configuration (one-axis A/B controls)");
 
@@ -1270,7 +1275,14 @@ impl NativeCedarDecoder {
                     profile.note_stage(9, elapsed_us(arm_begin));
                 }
                 if retry {
-                    std::thread::sleep(std::time::Duration::from_micros(200));
+                    let sleep_begin = self.profile.as_ref().map(|_| Instant::now());
+                    std::thread::sleep(std::time::Duration::from_micros(self.retry_us));
+                    if let Some(profile) = self.profile.as_mut() {
+                        // Stage 10: the backoff itself. It is inside the drain body
+                        // (stage 6) but outside the arm timers, so without its own
+                        // column it reads as unattributed body time.
+                        profile.note_stage(10, elapsed_us(sleep_begin));
+                    }
                     return Ok(DrainStep::Again);
                 }
                 Ok(DrainStep::Done)
