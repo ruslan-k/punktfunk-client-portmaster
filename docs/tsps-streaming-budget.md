@@ -606,3 +606,31 @@ It is not this change. Three controls, all at ~46.6 ms decode-inclusive:
 What is left to look at is the receive-to-decode hand-off itself (client AU pump versus
 host send cadence), and it dominates today's end-to-end latency far more than the
 0.9 ms copy does. Worth its own measurement before more decode work.
+
+#### Three cheap hypotheses, measured and dropped
+
+The ~43 ms sits in front of the decoder, so three candidates were run on the
+installed build (`2aacc46`, no rebuild) before writing any telemetry:
+
+- **Host send cadence.** `PUNKTFUNK_PERF=1` prints the client's own AU inter-arrival
+  window (`frame inter-arrival jitter (window)`, `client/pump/data.rs`). Twelve
+  consecutive windows: `arrival_p50_us` 16733-16814, `arrival_p95_us` 16903-17433,
+  `arrival_max_us` <= 19373, `late=0`. Delivery is one frame every 16.75 ms with no
+  clumps, so the queue is not a burst the channel is faithfully holding.
+- **Thread priorities.** Every hot thread reports `priority raised` via `setpriority`
+  (`decode`, `core-pump`, `presenter`, `frame-wake`, audio) and there are no
+  `priority refused` lines. `PUNKTFUNK_THREAD_BOOST=0` for one run changed nothing:
+  decode-inclusive 46.6 ms, capture-to-presentation 61.4 ms, against 46.6 / 61.6 with
+  the boost on. No priority interaction to find.
+- **A real backlog.** No `jump-to-live`, no flush and no shed line appears in any run,
+  so the standing depth never reaches `QUEUE_HIGH` (6). The queue stands at ~2-3 AUs,
+  which the channel tolerates by design: `preroll_draining` only ends once the depth
+  first falls to `QUEUE_LOW` (2).
+
+That leaves the consumer side: with arrival clean and the decode 2.6 ms of a 16.7 ms
+frame, something downstream of the decoder keeps the channel from draining. The
+measurement that separates the remaining candidates is the one proposed for the next
+build - timestamps at receive, channel pop, decode enter, decode exit and hand-off,
+plus a queue-depth histogram - and it should include the hand-off into the presenter's
+bounded channel, because a 60 Hz FIFO presenter is the only part of the path that has
+been shown to throttle a 60 fps producer.
